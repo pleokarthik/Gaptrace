@@ -35,3 +35,4 @@ htmlcov/
 
 # example output
 examples/rag_pipeline/output/
+.claude/

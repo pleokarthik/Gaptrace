@@ -1,6 +1,11 @@
 # ragradar — Scope Document
 
-**Status:** Draft v0.1  
+**Status:** Draft v0.1 — original scope document, retained for delivery history.
+Tools 1 and 2 (ragradar-capture, ragradar) and Tool 3 (ragradar-evaluate) are
+delivered; Tool 4 (ragradar-improve) is still deferred. Store/schema
+ownership described below predates the later `ragradar-core` extraction —
+see `docs/ARCHITECTURE.md` and `design-doc.md` for the current package
+picture and the `Capture` rename.  
 **Author:** Leo Karthik Paramasivan  
 **Date:** 2026-06-26
 
@@ -29,18 +34,18 @@ Not an analysis tool. Not a CLI. Not opinionated about the pipeline stack.
 **Core capture API**
 
 ```python
-ragradar.start(query, pipeline)      # begins a run, creates session if needed
-run.chunks(chunks)              # retrieval stage
-run.context(prompt, budget)     # assembly stage
-run.history(pre, post, reason)  # history management stage
-run.response(response, usage)   # LLM output stage
-run.cache(events)               # cache events
-run.commit()                    # writes to store
+ragradar.start(query, pipeline)          # begins a run, creates session if needed
+cap.chunks(chunks)                       # retrieval stage
+cap.context(prompt, budget)              # assembly stage
+cap.history(pre, post, eviction_reason)  # history management stage
+cap.response(response, usage)            # LLM output stage
+cap.cache(events)                        # cache events
+cap.commit()                             # writes to store
 ```
 
-Thread-local active run — `ragradar.*` accessible across files without passing run object.
+Thread-local active capture — `ragradar.*` accessible across files without passing the `Capture` object.
 
-Auto-commit on `run.response()` if `run.commit()` not called explicitly.
+Auto-commit on `cap.response()` if `cap.commit()` not called explicitly.
 
 **Single-line fallback**
 
@@ -70,7 +75,7 @@ All capture calls wrapped in try/except internally. Failures logged to `~/.ragra
 
 ---
 
-**Schema — owned by ragradar-capture**
+**Schema — owned by ragradar-capture at delivery time** (later centralized into the `ragradar-core` kernel; see `ARCHITECTURE.md`)
 
 ```sql
 meta(key, value)
@@ -123,15 +128,20 @@ Zero third-party dependencies.
 
 ```
 ragradar_capture/
-  api.py              # public surface — ragradar.start(), run.*, ragradar.capture()
+  api.py              # public surface — ragradar.start(), cap.*, ragradar.capture()
   schema.py           # RunRecord and child dataclasses
   store.py            # SQLite write, schema init, migrations
-  thread_local.py     # active run registry
+  thread_local.py     # active capture registry
   scaffold/
     template.py       # ragradar-capture init generator
 pyproject.toml
 README.md
 ```
+
+(`schema.py` and `store.py` as planned here were later extracted into the
+shared `ragradar-core` kernel once `ragradar` and `ragradar-evaluate` needed
+the same schema and store — see `ARCHITECTURE.md`. `ragradar_capture` today
+holds only `api.py`, `thread_local.py`, and `scaffold/`.)
 
 ---
 
@@ -318,13 +328,13 @@ Semantic dependencies are optional extras — `pip install ragradar[semantic]`.
 
 ```
 ragradar/
-  cli.py                      # entrypoint — all ragradar commands
-  store.py                    # read-only SQLite queries
+  cli.py                      # entrypoint — all ragradar commands, incl. session rename
+  store.py                    # read-only SQLite queries (delegates to ragradar-core)
   find/
     query_builder.py          # filter → SQL composer
     bm25.py                   # token scoring
-    semantic.py               # embedding + cosine (optional)
-    fusion.py                 # RRF combiner
+    semantic.py               # embedding + cosine (optional, not yet built)
+    fusion.py                 # RRF combiner (optional, not yet built)
   explain/
     loader.py                 # fetch RunRecord from store
     analyzers/
@@ -337,10 +347,14 @@ ragradar/
     renderer/
       terminal.py             # rich output
       html.py                 # snapshot
-  session.py                  # session rename command
 pyproject.toml
 README.md
 ```
+
+(`find/semantic.py` and `find/fusion.py` remain unimplemented — optional
+semantic search was scoped here but deferred, as `design-doc.md` notes.
+`session rename` shipped as a command group inside `cli.py` rather than a
+separate `session.py` module.)
 
 ---
 
@@ -538,6 +552,7 @@ click                         # CLI framework
 ```
 ragradar_evaluate/
   cli.py                      # entrypoint
+  facade.py                   # public task API — check(), evaluate(), available_metrics()
   layers/
     input_quality.py          # deterministic input scoring
     output_quality.py         # RAGAS integration
@@ -545,15 +560,19 @@ ragradar_evaluate/
     builder.py                # correlation analysis
     seeder.py                 # synthetic baseline generator
     checker.py                # run vs benchmark scoring
-    exporter.py               # RAGAS dataset export
+    exporter.py                # RAGAS dataset export
   policy/
     schema.py                 # InputQualityPolicy dataclass
-    store.py                  # policy read/write
+    persistence.py             # policy read/write
     risk.py                   # risk score computation
-  store.py                    # eval_scores write, benchmark read/write
 pyproject.toml
 README.md
 ```
+
+(The task-level `check()`/`evaluate()`/`available_metrics()` facade above
+was added after this scope was drafted — the CLI now routes through it
+instead of scoring directly. `eval_scores`/benchmark persistence itself
+lives in the shared `ragradar-core` store, not a package-local `store.py`.)
 
 ---
 

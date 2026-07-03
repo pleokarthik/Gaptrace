@@ -294,7 +294,7 @@ cap = ragradar_capture.start(query="what is RRF", pipeline="my_project")
 cap.chunks(chunks)                              # after retrieval
 cap.context(final_prompt, token_budget)         # after assembly
 cap.history(pre=pre_turns, post=post_turns,
-            reason="token_budget")              # after eviction
+            eviction_reason="token_budget")      # after eviction
 cap.cache(cache_events)                         # cache hit/miss data
 run_id = cap.response(response, token_usage=usage,
                       model="gpt-4")            # after LLM call
@@ -566,7 +566,7 @@ ragradar does not replace RAGAS — it composes with it. RAGAS measures output q
 
 ### Phase 1 — ragradar_capture + ragradar
 
-Delivered as a single release. ragradar-capture (the instrumentation SDK) and ragradar (the analyst CLI) share a store contract and were developed together. Their shared schema and store were later extracted into the `ragradar-core` kernel, which owns them (and their tests — migration, FTS5 triggers, persistence primitives, the zero-dependency guardrail) today. The full workspace suite currently stands at 269 tests across the four packages; run `uv run pytest` from the repo root for the authoritative count.
+Delivered as a single release. ragradar-capture (the instrumentation SDK) and ragradar (the analyst CLI) share a store contract and were developed together. Their shared schema and store were later extracted into the `ragradar-core` kernel, which owns them (and their tests — migration, FTS5 triggers, persistence primitives, the zero-dependency guardrail) today. The full workspace suite currently stands at 290 tests across the four packages; run `uv run pytest` from the repo root for the authoritative count.
 
 Packages: `ragradar-core` v0.1.0, `ragradar-capture` v0.1.0, `ragradar` v0.1.0.
 

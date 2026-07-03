@@ -339,7 +339,7 @@ class TestFailureSilence:
         def fail(*a, **k):
             raise RuntimeError("boom")
 
-        monkeypatch.setattr("ragradar_core.store.get_or_create_session", fail)
+        monkeypatch.setattr("ragradar_core.store.commit_run", fail)
         assert ragradar_capture.capture("q", "r") is None
 
     def test_capture_method_failure_never_raises(self):
@@ -354,7 +354,7 @@ class TestFailureSilence:
         def fail(*a, **k):
             raise RuntimeError("db error")
 
-        monkeypatch.setattr("ragradar_core.store.write_run", fail)
+        monkeypatch.setattr("ragradar_core.store.commit_run", fail)
         cap = ragradar_capture.start("q", pipeline="test")
         cap._record.response = "r"
         assert cap.commit() is None
@@ -372,7 +372,7 @@ class TestStrictMode:
         def fail(*a, **k):
             raise RuntimeError("db error")
 
-        monkeypatch.setattr("ragradar_core.store.write_run", fail)
+        monkeypatch.setattr("ragradar_core.store.commit_run", fail)
         ragradar_capture.set_strict(True)
         cap = ragradar_capture.start("q", pipeline="test")
         cap._record.response = "r"

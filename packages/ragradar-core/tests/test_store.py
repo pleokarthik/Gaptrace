@@ -1,5 +1,6 @@
 import json
 import sqlite3
+import threading
 from datetime import datetime, timedelta, timezone
 
 from ragradar_core import store
@@ -166,6 +167,99 @@ class TestWriteRun:
 
     def test_get_latest_run_empty_store(self):
         assert store.get_latest_run() is None
+
+
+class TestCommitRunAtomic:
+    """commit_run() is the race-free replacement for calling
+    get_or_create_session() + next_run_seq() + write_run() as three
+    separate connections (see Capture.commit()). These tests cover both
+    the happy path and the concurrency bug it fixes: under the old
+    three-call sequence, concurrent commits to one session raced on
+    (session_id, run_seq), raised sqlite3.IntegrityError, and got
+    silently swallowed by the capture layer -- 7 of 8 runs lost in an
+    8-thread burst. commit_run() must persist all 8, gaplessly.
+    """
+
+    def test_single_commit_matches_manual_sequence(self):
+        rec = RunRecord(query="q", response="r")
+        sid, seq = store.commit_run("test_pipe", rec)
+        assert seq == 1
+        row = store.get_run(sid, seq)
+        assert row is not None
+        assert row["query"] == "q"
+
+    def test_sequential_commits_are_gapless_and_monotonic(self):
+        """Matches the audit's "test 1": 6 sequential commits, one pipeline."""
+        run_ids = []
+        for i in range(6):
+            rec = RunRecord(query=f"agent iteration {i}", response=f"response {i}")
+            sid, seq = store.commit_run("agent_loop_test", rec)
+            run_ids.append(f"s{sid}r{seq}")
+
+        assert run_ids == ["s1r1", "s1r2", "s1r3", "s1r4", "s1r5", "s1r6"]
+        rows = store.get_runs_in_session(1)
+        assert len(rows) == 6
+        assert sorted(r["run_seq"] for r in rows) == [1, 2, 3, 4, 5, 6]
+
+    def test_concurrent_commits_same_session_all_persist_no_loss(self):
+        """Matches the audit's "test 4": 8 threads committing to the same
+        pipeline/session at once. Before the fix this lost 7/8 runs to a
+        swallowed IntegrityError; commit_run() must lose zero.
+        """
+        n = 8
+        results: list[tuple[int, int] | Exception] = [None] * n
+
+        def worker(idx):
+            rec = RunRecord(query=f"concurrent {idx}", response=f"concurrent response {idx}")
+            try:
+                results[idx] = store.commit_run("agent_loop_test", rec)
+            except Exception as e:  # pragma: no cover - failure path under test
+                results[idx] = e
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(n)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        failures = [r for r in results if isinstance(r, Exception)]
+        assert not failures, f"commit_run() raised under concurrency: {failures}"
+
+        session_ids = {sid for sid, _ in results}
+        assert session_ids == {1}, "all 8 concurrent commits should share one session"
+
+        seqs = sorted(seq for _, seq in results)
+        assert seqs == list(range(1, n + 1)), (
+            f"run_seq must be gapless and unique across concurrent commits, got {seqs}"
+        )
+
+        rows = store.get_runs_in_session(1)
+        assert len(rows) == n, f"expected {n} persisted runs, found {len(rows)} -- data was lost"
+
+    def test_concurrent_collision_would_raise_not_swallow(self, monkeypatch):
+        """If a run_seq collision ever slipped past the transaction (it
+        shouldn't -- this pins the belt-and-suspenders behavior), it must
+        raise loudly rather than being retried or swallowed, since silent
+        loss is the bug being fixed.
+        """
+        real_write_run_on = store._write_run_on
+        calls = {"n": 0}
+
+        def flaky_write_run_on(conn, session_id, run_seq, record, pipeline):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                # Simulate a collision slipping through despite the lock.
+                raise sqlite3.IntegrityError("UNIQUE constraint failed: runs.session_id, runs.run_seq")
+            return real_write_run_on(conn, session_id, run_seq, record, pipeline)
+
+        monkeypatch.setattr(store, "_write_run_on", flaky_write_run_on)
+
+        rec = RunRecord(query="q", response="r")
+        try:
+            store.commit_run("test_pipe", rec)
+            assert False, "expected RuntimeError to propagate, not be swallowed"
+        except RuntimeError as e:
+            assert "collision" in str(e)
 
 
 class TestEvalScores:

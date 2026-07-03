@@ -208,9 +208,9 @@ ragradar/
     ragradar/              # umbrella package (re-exports everything) + analyst CLI
     ragradar-evaluate/     # evaluation layer — ragas, scipy, sentence-transformers
   examples/
-    rag_pipeline/     # end-to-end working example
+    rag_pipeline/     # end-to-end working examples
   docs/
-    internal/         # design doc, scope doc
+    ARCHITECTURE.md, design-doc.md, scope.md, execution-flow.md
 ```
 
 ---

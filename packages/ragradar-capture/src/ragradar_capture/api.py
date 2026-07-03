@@ -188,13 +188,17 @@ class Capture:
         without writing again. Returns None if the write failed in
         non-strict mode (the failure is logged to ~/.ragradar/errors.log);
         never raises unless strict mode is on.
+
+        Session resolution, run_seq assignment, and the insert happen in
+        one atomic transaction (``store.commit_run``) so concurrent
+        commits to the same session can't race on ``(session_id,
+        run_seq)`` — see ``ragradar_core.store.commit_run`` for why this
+        needs to be one call rather than three.
         """
         if self._run_id is not None:
             return self._run_id
         try:
-            session_id = store.get_or_create_session(self._pipeline)
-            run_seq = store.next_run_seq(session_id)
-            store.write_run(session_id, run_seq, self._record, self._pipeline)
+            session_id, run_seq = store.commit_run(self._pipeline, self._record)
             self._run_id = f"s{session_id}r{run_seq}"
             return self._run_id
         except Exception as e:

@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+dist/
+build/
+*.so
+
+# uv
+.uv/
+uv.lock
+
+# ragradar runtime — never commit user run data
+.ragradar/
+
+# environment
+.env
+*.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# test output
+.pytest_cache/
+htmlcov/
+.coverage
+
+# example output
+examples/rag_pipeline/output/

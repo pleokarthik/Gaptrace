@@ -1,12 +1,16 @@
+from datetime import datetime, timedelta, timezone
+
 from ragradar.explain.analyzers import (
     cache,
     duplicates,
     history,
     scores,
+    semantic_cache,
     tokens,
     truncation,
 )
-from ragradar_core.schema import ChunkRecord, RunRecord, TokenBudget, Turn
+from ragradar_core.schema import CacheRecord, ChunkRecord, RunRecord, TokenBudget, Turn
+from ragradar_evaluate.policy.schema import InputQualityPolicy
 
 
 class TestEmptyRecord:
@@ -29,6 +33,9 @@ class TestEmptyRecord:
 
     def test_cache(self):
         assert cache.analyze(self.empty) is None
+
+    def test_semantic_cache(self):
+        assert semantic_cache.analyze(self.empty) is None
 
     def test_scores(self):
         assert scores.analyze(self.empty) is None
@@ -318,3 +325,82 @@ class TestScores:
         )
         result = scores.analyze(record)
         assert result is None
+
+
+class TestSemanticCache:
+    def test_not_checked_still_renders_checked_false(self):
+        record = RunRecord(query="q", response="r", cache=CacheRecord(checked=False))
+        result = semantic_cache.analyze(record)
+        assert result is not None
+        assert result["checked"] is False
+
+    def test_checked_miss(self):
+        record = RunRecord(query="q", response="r", cache=CacheRecord(checked=True, hit=False))
+        result = semantic_cache.analyze(record)
+        assert result["checked"] is True
+        assert result["hit"] is False
+        assert result["borderline_hit"] is False
+        assert result["stale_hit"] is False
+
+    def test_checked_hit_clean(self):
+        record = RunRecord(
+            query="q",
+            response="r",
+            cache=CacheRecord(
+                checked=True,
+                hit=True,
+                similarity_score=0.98,
+                threshold=0.9,
+                cached_at=datetime.now(timezone.utc).isoformat(),
+                registered=True,
+            ),
+        )
+        result = semantic_cache.analyze(record, InputQualityPolicy())
+        assert result["hit"] is True
+        assert result["borderline_hit"] is False
+        assert result["stale_hit"] is False
+
+    def test_checked_hit_borderline(self):
+        record = RunRecord(
+            query="q",
+            response="r",
+            cache=CacheRecord(
+                checked=True,
+                hit=True,
+                similarity_score=0.91,
+                threshold=0.9,
+                cached_at=datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        policy = InputQualityPolicy(cache_borderline_margin=0.03)
+        result = semantic_cache.analyze(record, policy)
+        assert result["borderline_hit"] is True
+        assert result["stale_hit"] is False
+
+    def test_checked_hit_stale(self):
+        old_time = datetime.now(timezone.utc) - timedelta(days=2)
+        record = RunRecord(
+            query="q",
+            response="r",
+            cache=CacheRecord(
+                checked=True,
+                hit=True,
+                similarity_score=0.98,
+                threshold=0.9,
+                cached_at=old_time.isoformat(),
+            ),
+        )
+        policy = InputQualityPolicy(cache_max_age_seconds=3600)
+        result = semantic_cache.analyze(record, policy)
+        assert result["borderline_hit"] is False
+        assert result["stale_hit"] is True
+
+    def test_default_policy_used_when_none_given(self):
+        record = RunRecord(
+            query="q",
+            response="r",
+            cache=CacheRecord(checked=True, hit=True, similarity_score=0.98, threshold=0.9),
+        )
+        result = semantic_cache.analyze(record)
+        assert result is not None
+        assert result["borderline_hit"] is False

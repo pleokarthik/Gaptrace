@@ -4,6 +4,7 @@
 # ragradar_evaluate, both of which re-export the dataclasses.
 from ragradar_core.schema import (
     CacheEvent,
+    CacheRecord,
     ChunkRecord,
     RunRecord,
     TokenBudget,
@@ -19,6 +20,7 @@ __all__ = [
     "TokenUsage",
     "Turn",
     "CacheEvent",
+    "CacheRecord",
     "ToolCallRecord",
     "RunRecord",
     "parse_target_id",

@@ -2,6 +2,7 @@ from dataclasses import asdict
 
 from ragradar_core.schema import (
     CacheEvent,
+    CacheRecord,
     ChunkRecord,
     RunRecord,
     TokenBudget,
@@ -65,6 +66,15 @@ def _full_record():
         ],
         model="gpt-4",
         token_usage=TokenUsage(input_tokens=300, output_tokens=50, total_tokens=350),
+        cache=CacheRecord(
+            checked=True,
+            hit=True,
+            similarity_score=0.92,
+            threshold=0.9,
+            cached_query="what is RRF, roughly?",
+            cached_at="2026-01-01T00:00:00+00:00",
+            registered=True,
+        ),
     )
 
 
@@ -153,6 +163,26 @@ class TestChildDataclassRoundTrips:
             assert asdict(CacheEvent(**asdict(original))) == asdict(original)
         assert CacheEvent(chunk_id="c", hit=False).cache_source is None
 
+    def test_cache_record(self):
+        full = CacheRecord(
+            checked=True,
+            hit=True,
+            similarity_score=0.92,
+            threshold=0.9,
+            cached_query="q",
+            cached_at="2026-01-01T00:00:00+00:00",
+            registered=True,
+        )
+        minimal = CacheRecord(checked=False)
+        for original in (full, minimal):
+            assert asdict(CacheRecord(**asdict(original))) == asdict(original)
+        assert minimal.hit is False
+        assert minimal.similarity_score is None
+        assert minimal.threshold is None
+        assert minimal.cached_query is None
+        assert minimal.cached_at is None
+        assert minimal.registered is False
+
     def test_tool_call_record(self):
         full = ToolCallRecord(
             tool_name="t",
@@ -185,6 +215,8 @@ class TestFullRunRecord:
         assert data["tool_calls"][0]["tool_name"] == "search"
         assert data["model"] == "gpt-4"
         assert data["eviction_reason"] == "token_budget"
+        assert data["cache"]["hit"] is True
+        assert data["cache"]["similarity_score"] == 0.92
 
     def test_deserialises(self):
         data = _full_record().to_json()
@@ -200,6 +232,9 @@ class TestFullRunRecord:
         assert isinstance(rec.tool_calls[0], ToolCallRecord)
         assert rec.tool_calls[0].arguments == {"query": "RRF"}
         assert isinstance(rec.token_usage, TokenUsage)
+        assert isinstance(rec.cache, CacheRecord)
+        assert rec.cache.threshold == 0.9
+        assert rec.cache.registered is True
 
     def test_round_trip(self):
         original = _full_record()
@@ -259,6 +294,7 @@ class TestFlexibleInit:
         )
         assert Turn(role="user", content="hi", future=True).content == "hi"
         assert CacheEvent(chunk_id="c", hit=True, future=True).hit is True
+        assert CacheRecord(checked=True, future=True).checked is True
 
     def test_from_json_ignores_unknown_fields(self):
         data = {"query": "q", "response": "r", "new_field": True}

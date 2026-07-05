@@ -1,4 +1,5 @@
 from ragradar_core.schema import RunRecord
+from ragradar_evaluate.policy.persistence import load_policy
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -14,6 +15,9 @@ from ragradar.explain.analyzers import (
 )
 from ragradar.explain.analyzers import (
     scores as scores_mod,
+)
+from ragradar.explain.analyzers import (
+    semantic_cache as semantic_cache_mod,
 )
 from ragradar.explain.analyzers import (
     tokens as tokens_mod,
@@ -150,6 +154,40 @@ def _render_cache(result: dict, full: bool) -> Panel:
     return Panel("\n".join(lines), title="Cache Hits", border_style=style)
 
 
+def _render_semantic_cache(result: dict, full: bool) -> Panel:
+    if not result["checked"]:
+        return Panel("Not checked", title="Cache behavior", border_style="white")
+
+    flags = []
+    if result["hit"] and result["borderline_hit"]:
+        flags.append(
+            "Borderline hit: similarity landed within the borderline margin of the "
+            "threshold — this may have reused a near-miss cached answer."
+        )
+    if result["hit"] and result["stale_hit"]:
+        flags.append(
+            f"Stale hit: cached answer is {result['age_seconds']:.0f}s old, past the "
+            "configured max age — it may no longer be accurate."
+        )
+
+    style = "green" if result["hit"] and not flags else "yellow" if flags else "white"
+
+    lines = [f"Checked: yes -> {'hit' if result['hit'] else 'miss'}"]
+    if result["similarity_score"] is not None and result["threshold"] is not None:
+        lines.append(
+            f"Similarity: {result['similarity_score']:.4f} (threshold {result['threshold']:.4f})"
+        )
+    if result["hit"] and not result["registered"]:
+        lines.append("Not registered in the cache index.")
+    for flag in flags:
+        lines.append(f"[yellow]{flag}[/yellow]")
+
+    if full and result["cached_query"]:
+        lines.append(f"\nCached query: {result['cached_query']}")
+
+    return Panel("\n".join(lines), title="Cache behavior", border_style=style)
+
+
 _ANALYZERS = [
     (tokens_mod, _render_tokens),
     (scores_mod, _render_scores),
@@ -220,6 +258,13 @@ def render(record: RunRecord, full: bool = False, run_row: dict | None = None) -
         result = mod.analyze(record)
         if result is not None:
             console.print(renderer(result, full))
+
+    if record.cache is not None:
+        pipeline_key = (run_row or {}).get("pipeline") or "__default"
+        policy = load_policy(pipeline_key)
+        cache_result = semantic_cache_mod.analyze(record, policy)
+        if cache_result is not None:
+            console.print(_render_semantic_cache(cache_result, full))
 
     if run_row is not None:
         eval_panel = _render_eval_scores(run_row)

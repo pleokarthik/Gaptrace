@@ -22,6 +22,8 @@ class InputQualityPolicy:
     max_high_score_truncations: int = 0
     max_source_domains: int = 3
     llm_rewrite_risk_threshold: float = 0.7
+    cache_borderline_margin: float = 0.03
+    cache_max_age_seconds: int = 86400
 
     def to_dict(self) -> dict:
         """This policy as a plain, JSON-serializable dict. Pure."""

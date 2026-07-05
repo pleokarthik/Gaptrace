@@ -1,9 +1,10 @@
 import json
+from datetime import datetime, timedelta, timezone
 
 from click.testing import CliRunner
 from ragradar.cli import main
 from ragradar_core import store as core_store
-from ragradar_core.schema import RunRecord
+from ragradar_core.schema import CacheRecord, RunRecord
 
 
 class TestList:
@@ -209,6 +210,78 @@ class TestExplainEvalScores:
         result = CliRunner().invoke(main, ["explain", "s1r1"])
         assert result.exit_code == 0
         assert "Evaluation Scores" in result.output
+
+
+class TestExplainSemanticCache:
+    def _insert(self, cache: CacheRecord, session_id: int = 1):
+        rec = RunRecord(query="cache query", response="cache response", cache=cache)
+        conn = core_store.connect()
+        conn.execute(
+            "INSERT INTO sessions (session_id, title, pipeline, created_at) "
+            "VALUES (?, NULL, 'p', '2026-06-10T10:00:00+00:00')",
+            (session_id,),
+        )
+        conn.execute(
+            "INSERT INTO runs (session_id, run_seq, query, pipeline, created_at, run_data) "
+            "VALUES (?, 1, ?, 'p', '2026-06-10T10:00:00+00:00', ?)",
+            (session_id, rec.query, json.dumps(rec.to_json())),
+        )
+        conn.commit()
+        conn.close()
+
+    def test_no_cache_data_skips_panel_silently(self, ragradar_home):
+        rec = RunRecord(query="q", response="r")
+        conn = core_store.connect()
+        conn.execute(
+            "INSERT INTO sessions (session_id, title, pipeline, created_at) "
+            "VALUES (1, NULL, 'p', '2026-06-10T10:00:00+00:00')"
+        )
+        conn.execute(
+            "INSERT INTO runs (session_id, run_seq, query, pipeline, created_at, run_data) "
+            "VALUES (1, 1, ?, 'p', '2026-06-10T10:00:00+00:00', ?)",
+            (rec.query, json.dumps(rec.to_json())),
+        )
+        conn.commit()
+        conn.close()
+        result = CliRunner().invoke(main, ["explain", "s1r1"])
+        assert result.exit_code == 0
+        assert "Cache behavior" not in result.output
+
+    def test_checked_miss_renders_panel(self, ragradar_home):
+        self._insert(CacheRecord(checked=True, hit=False))
+        result = CliRunner().invoke(main, ["explain", "s1r1"])
+        assert result.exit_code == 0
+        assert "Cache behavior" in result.output
+        assert "miss" in result.output
+
+    def test_checked_hit_borderline_explains_why(self, ragradar_home):
+        self._insert(
+            CacheRecord(
+                checked=True,
+                hit=True,
+                similarity_score=0.91,
+                threshold=0.9,
+                cached_at=datetime.now(timezone.utc).isoformat(),
+            )
+        )
+        result = CliRunner().invoke(main, ["explain", "s1r1"])
+        assert result.exit_code == 0
+        assert "Borderline hit" in result.output
+
+    def test_checked_hit_stale_explains_why(self, ragradar_home):
+        old_time = datetime.now(timezone.utc) - timedelta(days=2)
+        self._insert(
+            CacheRecord(
+                checked=True,
+                hit=True,
+                similarity_score=0.98,
+                threshold=0.9,
+                cached_at=old_time.isoformat(),
+            )
+        )
+        result = CliRunner().invoke(main, ["explain", "s1r1"])
+        assert result.exit_code == 0
+        assert "Stale hit" in result.output
 
 
 class TestSessionRename:

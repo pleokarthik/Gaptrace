@@ -1,5 +1,11 @@
-from ragradar_core.schema import ChunkRecord, RunRecord, TokenBudget
-from ragradar_evaluate.layers.input_quality import cosine_similarity, score_input_quality
+from datetime import datetime, timedelta, timezone
+
+from ragradar_core.schema import CacheRecord, ChunkRecord, RunRecord, TokenBudget
+from ragradar_evaluate.layers.input_quality import (
+    cosine_similarity,
+    score_cache_risk,
+    score_input_quality,
+)
 from ragradar_evaluate.policy.schema import InputQualityPolicy
 
 
@@ -256,6 +262,80 @@ class TestPolicy:
         result = score_input_quality(rec, policy)
         assert result["mean_relevance"] == 0.6667
         assert "min_chunk_relevance_score" in result["policy_violations"]
+
+
+class TestCacheRisk:
+    def _record(self, cache: CacheRecord | None) -> RunRecord:
+        return RunRecord(query="q", response="r", cache=cache)
+
+    def test_no_cache_data_returns_none(self):
+        rec = self._record(None)
+        assert score_cache_risk(rec, InputQualityPolicy()) is None
+
+    def test_not_checked_returns_none(self):
+        rec = self._record(CacheRecord(checked=False))
+        assert score_cache_risk(rec, InputQualityPolicy()) is None
+
+    def test_checked_miss(self):
+        rec = self._record(CacheRecord(checked=True, hit=False))
+        result = score_cache_risk(rec, InputQualityPolicy())
+        assert result["cache_hit"] is False
+        assert result["borderline_hit"] is False
+        assert result["stale_hit"] is False
+
+    def test_checked_hit_clean(self):
+        rec = self._record(
+            CacheRecord(
+                checked=True,
+                hit=True,
+                similarity_score=0.98,
+                threshold=0.9,
+                cached_at=datetime.now(timezone.utc).isoformat(),
+            )
+        )
+        result = score_cache_risk(rec, InputQualityPolicy())
+        assert result["cache_hit"] is True
+        assert result["borderline_hit"] is False
+        assert result["stale_hit"] is False
+
+    def test_checked_hit_borderline(self):
+        policy = InputQualityPolicy(cache_borderline_margin=0.03)
+        rec = self._record(
+            CacheRecord(
+                checked=True,
+                hit=True,
+                similarity_score=0.91,
+                threshold=0.9,
+                cached_at=datetime.now(timezone.utc).isoformat(),
+            )
+        )
+        result = score_cache_risk(rec, policy)
+        assert result["borderline_hit"] is True
+        assert result["stale_hit"] is False
+
+    def test_checked_hit_stale(self):
+        policy = InputQualityPolicy(cache_max_age_seconds=3600)
+        old_time = datetime.now(timezone.utc) - timedelta(hours=2)
+        rec = self._record(
+            CacheRecord(
+                checked=True,
+                hit=True,
+                similarity_score=0.98,
+                threshold=0.9,
+                cached_at=old_time.isoformat(),
+            )
+        )
+        result = score_cache_risk(rec, policy)
+        assert result["borderline_hit"] is False
+        assert result["stale_hit"] is True
+        assert result["cache_age_seconds"] > 3600
+
+    def test_registered_and_query_passed_through(self):
+        rec = self._record(
+            CacheRecord(checked=True, hit=True, cached_query="near dup", registered=True)
+        )
+        result = score_cache_risk(rec, InputQualityPolicy())
+        assert result["cache_registered"] is True
 
 
 class TestCosineSimilarity:

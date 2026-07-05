@@ -23,6 +23,7 @@ from collections.abc import Mapping
 
 from ragradar_core.schema import (
     CacheEvent,
+    CacheRecord,
     ChunkRecord,
     RunRecord,
     TokenBudget,
@@ -165,6 +166,19 @@ def coerce_cache_events(events) -> list[CacheEvent]:
     return out
 
 
+def coerce_cache_record(cache) -> CacheRecord:
+    """Coerce a semantic-cache check. Pure.
+
+    Accepts a CacheRecord (passed through untouched) or a dict with at
+    least "checked".
+    """
+    if isinstance(cache, CacheRecord):
+        return cache
+    if isinstance(cache, Mapping):
+        return CacheRecord(**cache)
+    raise TypeError(f"Cannot coerce {type(cache).__name__} into a cache record: {cache!r}")
+
+
 def coerce_token_usage(usage) -> TokenUsage:
     """Coerce token usage. Pure.
 
@@ -226,4 +240,5 @@ def coerce_run_record(record: RunRecord) -> RunRecord:
         token_usage=(
             coerce_token_usage(record.token_usage) if record.token_usage is not None else None
         ),
+        cache=(coerce_cache_record(record.cache) if record.cache is not None else None),
     )

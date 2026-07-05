@@ -302,6 +302,44 @@ class TestPrimitiveInputs:
         events = self._stored_record()["cache_events"]
         assert events == [{"chunk_id": "c3", "hit": True, "cache_source": None}]
 
+    def test_semantic_cache_all_fields(self):
+        cap = ragradar_capture.start("q", pipeline="test")
+        cap.semantic_cache(
+            checked=True,
+            hit=True,
+            similarity_score=0.94,
+            threshold=0.9,
+            cached_query="a near-duplicate question",
+            cached_at="2026-07-01T00:00:00+00:00",
+            registered=True,
+        )
+        cap.response("r")
+        cache = self._stored_record()["cache"]
+        assert cache == {
+            "checked": True,
+            "hit": True,
+            "similarity_score": 0.94,
+            "threshold": 0.9,
+            "cached_query": "a near-duplicate question",
+            "cached_at": "2026-07-01T00:00:00+00:00",
+            "registered": True,
+        }
+
+    def test_semantic_cache_defaults_on_miss(self):
+        cap = ragradar_capture.start("q", pipeline="test")
+        cap.semantic_cache(checked=True)
+        cap.response("r")
+        cache = self._stored_record()["cache"]
+        assert cache["checked"] is True
+        assert cache["hit"] is False
+        assert cache["similarity_score"] is None
+        assert cache["registered"] is False
+
+    def test_no_semantic_cache_call_leaves_cache_none(self):
+        cap = ragradar_capture.start("q", pipeline="test")
+        cap.response("r")
+        assert self._stored_record()["cache"] is None
+
     def test_token_usage_total_derived(self):
         ragradar_capture.capture(
             "q",
@@ -422,10 +460,18 @@ class TestThreadLocal:
         assert run_id == cap.run_id
         assert run_id is not None
 
+    def test_semantic_cache_proxy_routes_to_active_capture(self):
+        cap = ragradar_capture.start("proxy test", pipeline="test")
+        ragradar_capture.semantic_cache(checked=True, hit=True, similarity_score=0.95, threshold=0.9)
+        assert cap._record.cache is not None
+        assert cap._record.cache.hit is True
+        assert cap._record.cache.similarity_score == 0.95
+
     def test_proxy_without_active_capture_is_silent(self):
         ragradar_capture.chunks([])
         ragradar_capture.context("prompt")
         ragradar_capture.tool_call({"tool_name": "search", "arguments": {}})
+        ragradar_capture.semantic_cache(checked=True)
         assert ragradar_capture.response("r") is None
         assert ragradar_capture.commit() is None
 

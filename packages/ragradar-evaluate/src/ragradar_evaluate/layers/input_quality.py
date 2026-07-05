@@ -13,6 +13,7 @@ individually so selecting one metric never computes the others.
 """
 
 import math
+from datetime import datetime, timezone
 from typing import Callable
 
 from ragradar_core.schema import RunRecord
@@ -87,7 +88,9 @@ def _detect_semantic_dups(chunks, embedding_fn) -> int:
 
 # ---------------------------------------------------------------------------
 # Metric family functions — each pure: RunRecord in, flat value dict out.
-# All assume record.chunks is non-empty; callers gate on that.
+# All assume record.chunks is non-empty; callers gate on that. The one
+# exception is score_cache_risk, which keys off record.cache instead and
+# gates on it internally (returns None rather than assuming a caller did).
 # ---------------------------------------------------------------------------
 
 
@@ -219,6 +222,55 @@ def score_coherence(record: RunRecord) -> dict:
     }
 
 
+def score_cache_risk(record: RunRecord, policy: InputQualityPolicy) -> dict | None:
+    """Cache-risk family: does this run's semantic-cache check look
+    trustworthy? Pure.
+
+    Unlike the other families, this one is not applicable — and returns
+    None — for a record that never checked a semantic cache (record.cache
+    is None or record.cache.checked is False); callers should treat that
+    the same as "skip this metric", not as a fully-computed clean result.
+
+    borderline_hit flags a hit whose similarity landed within
+    policy.cache_borderline_margin of the threshold (right on the fence
+    of the cache's own cutoff). stale_hit flags a hit whose cached_at is
+    older than policy.cache_max_age_seconds (a reused answer from a long
+    time ago). Both are always False for a miss or an unchecked cache.
+    """
+    cache = record.cache
+    if cache is None or not cache.checked:
+        return None
+
+    borderline_hit = False
+    stale_hit = False
+    age_seconds = None
+
+    if cache.hit:
+        if cache.similarity_score is not None and cache.threshold is not None:
+            borderline_hit = (
+                abs(cache.similarity_score - cache.threshold) <= policy.cache_borderline_margin
+            )
+        if cache.cached_at is not None:
+            try:
+                cached_time = datetime.fromisoformat(cache.cached_at)
+                if cached_time.tzinfo is None:
+                    cached_time = cached_time.replace(tzinfo=timezone.utc)
+                age_seconds = (datetime.now(timezone.utc) - cached_time).total_seconds()
+                stale_hit = age_seconds > policy.cache_max_age_seconds
+            except ValueError:
+                age_seconds = None
+
+    return {
+        "cache_hit": cache.hit,
+        "cache_similarity_score": cache.similarity_score,
+        "cache_threshold": cache.threshold,
+        "cache_age_seconds": age_seconds,
+        "cache_registered": cache.registered,
+        "borderline_hit": borderline_hit,
+        "stale_hit": stale_hit,
+    }
+
+
 # Values rounded (to 4 places) for display/persistence only. Everything
 # else a family returns is an int, a string, None, or already rounded at
 # computation (score_variance).
@@ -227,6 +279,8 @@ _ROUND_KEYS = (
     "duplicate_ratio",
     "token_headroom_pct",
     "low_score_chunk_ratio",
+    "cache_similarity_score",
+    "cache_threshold",
 )
 
 

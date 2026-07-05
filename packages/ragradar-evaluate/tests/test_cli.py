@@ -40,10 +40,26 @@ class TestPolicyCommands:
         assert "0.7" in result.output
         assert "0.2" in result.output
 
+    def test_show_includes_cache_fields(self, migrated_db):
+        result = CliRunner().invoke(main, ["policy", "show"])
+        assert result.exit_code == 0
+        assert "cache_borderline_margin" in result.output
+        assert "cache_max_age_seconds" in result.output
+
     def test_set_valid_field(self, migrated_db):
         result = CliRunner().invoke(main, ["policy", "set", "min_top_chunk_score", "0.8"])
         assert result.exit_code == 0
         assert "0.8" in result.output
+
+    def test_set_cache_borderline_margin(self, migrated_db):
+        result = CliRunner().invoke(main, ["policy", "set", "cache_borderline_margin", "0.1"])
+        assert result.exit_code == 0
+        assert "0.1" in result.output
+
+    def test_set_cache_max_age_seconds(self, migrated_db):
+        result = CliRunner().invoke(main, ["policy", "set", "cache_max_age_seconds", "3600"])
+        assert result.exit_code == 0
+        assert "3600" in result.output
 
     def test_set_invalid_field(self, migrated_db):
         result = CliRunner().invoke(main, ["policy", "set", "unknown_field", "0.8"])

@@ -18,6 +18,16 @@ class TestPolicySchema:
         assert p.min_top_chunk_score == 0.7
         assert p.max_duplicate_ratio == 0.2
 
+    def test_cache_field_defaults(self):
+        p = InputQualityPolicy.default()
+        assert p.cache_borderline_margin == 0.03
+        assert p.cache_max_age_seconds == 86400
+
+    def test_cache_fields_round_trip_through_to_from_dict(self):
+        p = InputQualityPolicy(cache_borderline_margin=0.05, cache_max_age_seconds=3600)
+        p2 = InputQualityPolicy.from_dict(p.to_dict())
+        assert p2.cache_borderline_margin == 0.05
+        assert p2.cache_max_age_seconds == 3600
 
 class TestPolicyStore:
     def test_default_loads_without_db(self):
@@ -37,3 +47,10 @@ class TestPolicyStore:
         reset_policy("test_pipe")
         loaded = load_policy("test_pipe")
         assert loaded.min_top_chunk_score == 0.7
+
+    def test_save_and_load_cache_fields(self, migrated_db):
+        custom = InputQualityPolicy(cache_borderline_margin=0.1, cache_max_age_seconds=60)
+        save_policy("test_pipe", custom)
+        loaded = load_policy("test_pipe")
+        assert loaded.cache_borderline_margin == 0.1
+        assert loaded.cache_max_age_seconds == 60

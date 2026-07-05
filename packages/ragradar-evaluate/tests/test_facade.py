@@ -24,6 +24,7 @@ ALL_METRICS = {
     "truncation",
     "token_efficiency",
     "coherence",
+    "cache_risk",
     "faithfulness",
     "answer_relevancy",
     "context_precision",
@@ -32,7 +33,7 @@ ALL_METRICS = {
 
 
 class TestAvailableMetrics:
-    def test_all_nine_present(self):
+    def test_all_ten_present(self):
         metrics = available_metrics()
         assert set(metrics) == ALL_METRICS
 
@@ -100,10 +101,14 @@ class TestCompleteEval:
         result = evaluate(full_record, save=False)
 
         for name in INPUT_METRICS:
+            if name == "cache_risk":
+                continue  # full_record never checked a semantic cache -- not applicable.
             assert name in result.metrics, f"{name} missing from complete eval"
         for name in ("faithfulness", "answer_relevancy", "context_precision"):
             assert result.metrics[name] == fake_ragas.scores[name]
 
+        # cache_risk is legitimately not-applicable (no cache data), not missing data.
+        assert result.skipped["cache_risk"] == "not applicable: run never checked a semantic cache"
         # context_recall needs ground_truth -- skipped with the reason.
         assert result.skipped["context_recall"] == "requires ground_truth"
         assert result.risk_score is not None
@@ -120,6 +125,11 @@ class TestChunklessRecord:
         result = evaluate(rec, save=False)
 
         for name in INPUT_METRICS:
+            if name == "cache_risk":
+                # No chunks AND no cache data -- skipped for the cache reason,
+                # not the chunks reason.
+                assert "semantic cache" in result.skipped[name]
+                continue
             assert "no chunks" in result.skipped[name]
         for name in OUTPUT_METRICS:
             assert "no chunks" in result.skipped[name]
@@ -313,3 +323,60 @@ class TestTargetResolution:
 
         with pytest.raises(ValueError, match="commit"):
             evaluate(FakeCapture(), save=False)
+
+
+class TestCacheRiskIntegration:
+    """cache_risk is the one input metric that keys off record.cache
+    instead of record.chunks -- these prove evaluate()'s per-metric gate
+    actually threads that through, notably for the cache-hit-skips-
+    retrieval scenario where chunks is None but cache data exists."""
+
+    def test_fires_with_no_chunks_when_cache_was_checked(self):
+        from ragradar_core.schema import CacheRecord
+
+        rec = RunRecord(
+            query="q",
+            response="r",
+            cache=CacheRecord(checked=True, hit=True, similarity_score=0.98, threshold=0.9),
+        )
+        result = evaluate(rec, metrics=["cache_risk"], save=False)
+
+        assert "cache_risk" not in result.skipped
+        assert result.metrics["cache_risk"]["cache_hit"] is True
+
+    def test_skipped_as_not_applicable_when_cache_never_checked(self, full_record):
+        result = evaluate(full_record, metrics=["cache_risk"], save=False)
+        assert result.skipped["cache_risk"] == "not applicable: run never checked a semantic cache"
+        assert "cache_risk" not in result.metrics
+
+    def test_borderline_and_stale_flagged_through_evaluate(self):
+        from datetime import datetime, timedelta, timezone
+
+        from ragradar_core.schema import CacheRecord
+
+        old_time = datetime.now(timezone.utc) - timedelta(days=2)
+        rec = RunRecord(
+            query="q",
+            response="r",
+            cache=CacheRecord(
+                checked=True,
+                hit=True,
+                similarity_score=0.91,
+                threshold=0.9,
+                cached_at=old_time.isoformat(),
+            ),
+        )
+        policy = InputQualityPolicy(cache_borderline_margin=0.03, cache_max_age_seconds=3600)
+        result = evaluate(rec, metrics=["cache_risk"], policy=policy, save=False)
+
+        assert result.metrics["cache_risk"]["borderline_hit"] is True
+        assert result.metrics["cache_risk"]["stale_hit"] is True
+
+    def test_other_input_metrics_unaffected_by_cache_gate(self, full_record):
+        # A record with both chunks and no cache data still computes the
+        # 5 chunk-based metrics exactly as before cache_risk existed.
+        result = evaluate(full_record, metrics=list(INPUT_METRICS), save=False)
+        for name in INPUT_METRICS:
+            if name == "cache_risk":
+                continue
+            assert name in result.metrics

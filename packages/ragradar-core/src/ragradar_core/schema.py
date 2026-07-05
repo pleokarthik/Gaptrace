@@ -129,6 +129,27 @@ class ToolCallRecord:
 
 @_flexible
 @dataclass
+class CacheRecord:
+    """Whether this run's query hit a semantic cache, checked before
+    retrieval ran — the query-level cache check, distinct from the
+    per-chunk ``CacheEvent`` list.
+
+    Advanced/typed path — ``cap.semantic_cache(...)`` builds this from
+    its keyword arguments; there is no dict/tuple shorthand since every
+    field already maps 1:1 onto a keyword there.
+    """
+
+    checked: bool
+    hit: bool = False
+    similarity_score: Optional[float] = None
+    threshold: Optional[float] = None
+    cached_query: Optional[str] = None
+    cached_at: Optional[str] = None
+    registered: bool = False
+
+
+@_flexible
+@dataclass
 class RunRecord:
     """The complete captured record of one pipeline run.
 
@@ -152,6 +173,7 @@ class RunRecord:
     tool_calls: Optional[list[ToolCallRecord]] = None
     model: Optional[str] = None
     token_usage: Optional[TokenUsage] = None
+    cache: Optional[CacheRecord] = None
 
     def to_json(self) -> dict:
         """This record as a plain, JSON-serializable dict. Pure."""
@@ -180,4 +202,6 @@ class RunRecord:
             data["tool_calls"] = [ToolCallRecord(**t) for t in data["tool_calls"]]
         if data.get("token_usage") is not None:
             data["token_usage"] = TokenUsage(**data["token_usage"])
+        if data.get("cache") is not None:
+            data["cache"] = CacheRecord(**data["cache"])
         return cls(**data)

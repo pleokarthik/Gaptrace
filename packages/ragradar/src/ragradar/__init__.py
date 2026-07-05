@@ -19,12 +19,14 @@ from ragradar_capture import (
     context,
     history,
     response,
+    semantic_cache,
     set_strict,
     start,
     tool_call,
 )
 from ragradar_core.schema import (
     CacheEvent,
+    CacheRecord,
     ChunkRecord,
     RunRecord,
     TokenBudget,
@@ -53,6 +55,7 @@ __all__ = [
     "history",
     "response",
     "cache",
+    "semantic_cache",
     "tool_call",
     "commit",
     # Evaluation
@@ -69,6 +72,7 @@ __all__ = [
     "TokenUsage",
     "Turn",
     "CacheEvent",
+    "CacheRecord",
     "ToolCallRecord",
     "RunRecord",
 ]

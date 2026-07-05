@@ -68,6 +68,8 @@ class TestStory2CaptureThenEvaluate:
         assert result.run_id == run_id
         assert result.risk_score is not None
         for name in INPUT_METRICS:
+            if name == "cache_risk":
+                continue  # this run never checked a semantic cache -- not applicable.
             assert name in result.metrics
 
 
@@ -121,6 +123,8 @@ class TestStory6FullEvaluateWithMockedJudge:
         for name in ("faithfulness", "answer_relevancy", "context_precision", "context_recall"):
             assert isinstance(result.metrics[name], float)
         for name in INPUT_METRICS:
+            if name == "cache_risk":
+                continue  # this run never checked a semantic cache -- not applicable.
             assert name in result.metrics
         assert result.risk_score is not None
 

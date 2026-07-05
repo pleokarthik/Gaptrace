@@ -4,6 +4,7 @@ import os
 from ragradar_core import store
 from ragradar_core.coerce import (
     coerce_cache_events,
+    coerce_cache_record,
     coerce_chunks,
     coerce_token_budget,
     coerce_token_usage,
@@ -167,6 +168,40 @@ class Capture:
             self._record.cache_events = coerce_cache_events(events)
         except Exception as e:
             _handle_error("capture.cache()", e)
+
+    def semantic_cache(
+        self,
+        checked: bool,
+        hit: bool = False,
+        similarity_score: float | None = None,
+        threshold: float | None = None,
+        cached_query: str | None = None,
+        cached_at: str | None = None,
+        registered: bool = False,
+    ) -> None:
+        """Record the semantic-cache stage: whether this query's answer
+        was served from (or checked against) a semantic cache, before
+        retrieval ran.
+
+        This is the query-level cache check — distinct from cache()'s
+        per-chunk retrieval-cache events. Mutates this capture only
+        (store write happens at commit). Never raises unless strict
+        mode is on.
+        """
+        try:
+            self._record.cache = coerce_cache_record(
+                {
+                    "checked": checked,
+                    "hit": hit,
+                    "similarity_score": similarity_score,
+                    "threshold": threshold,
+                    "cached_query": cached_query,
+                    "cached_at": cached_at,
+                    "registered": registered,
+                }
+            )
+        except Exception as e:
+            _handle_error("capture.semantic_cache()", e)
 
     def tool_call(self, call: ToolCallRecord | dict) -> None:
         """Append one tool call (ToolCallRecord or dict) — never replaces.
@@ -337,6 +372,24 @@ def cache(events) -> None:
         _get_logger().error("cache() called with no active capture")
         return
     cap.cache(events)
+
+
+def semantic_cache(
+    checked: bool,
+    hit: bool = False,
+    similarity_score: float | None = None,
+    threshold: float | None = None,
+    cached_query: str | None = None,
+    cached_at: str | None = None,
+    registered: bool = False,
+) -> None:
+    """Proxy for the active capture's .semantic_cache(). Mutates the
+    active capture; logs and no-ops if there is none."""
+    cap = get_active_capture()
+    if cap is None:
+        _get_logger().error("semantic_cache() called with no active capture")
+        return
+    cap.semantic_cache(checked, hit, similarity_score, threshold, cached_query, cached_at, registered)
 
 
 def tool_call(call: ToolCallRecord | dict) -> None:

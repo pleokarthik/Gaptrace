@@ -82,6 +82,15 @@ _METRICS: dict[str, MetricInfo] = {
             "Source-domain spread and rerank score variance.",
         ),
         MetricInfo(
+            "cache_risk",
+            "input",
+            "free",
+            ("cache",),
+            "Semantic-cache check quality: flags borderline-similarity hits and "
+            "stale cached answers. Not applicable to runs that never checked a "
+            "semantic cache.",
+        ),
+        MetricInfo(
             "faithfulness",
             "output",
             "llm",
@@ -123,6 +132,7 @@ _INPUT_FN = {
     "truncation": "score_truncation",
     "token_efficiency": "score_token_efficiency",
     "coherence": "score_coherence",
+    "cache_risk": "score_cache_risk",
 }
 
 # The six factors check() compares against thresholds, with the direction
@@ -358,11 +368,23 @@ def evaluate(
     requested_input = [m for m in requested if m in INPUT_METRICS]
     raw_input_values: dict = {}
     for name in requested_input:
-        if not record.chunks:
+        info = _METRICS[name]
+        if "chunks" in info.requires and not record.chunks:
             result.skipped[name] = "missing data: record has no chunks"
             continue
+        if "cache" in info.requires and (record.cache is None or not record.cache.checked):
+            result.skipped[name] = "not applicable: run never checked a semantic cache"
+            continue
         family_fn = getattr(input_quality, _INPUT_FN[name])
-        values = family_fn(record)
+        if "cache" in info.requires:
+            if policy is None:
+                policy = load_policy(pipeline_key)
+            values = family_fn(record, policy)
+        else:
+            values = family_fn(record)
+        if values is None:
+            result.skipped[name] = "not applicable"
+            continue
         result.metrics[name] = input_quality.round_values(values)
         raw_input_values.update(values)
 

@@ -340,6 +340,38 @@ class TestPrimitiveInputs:
         cap.response("r")
         assert self._stored_record()["cache"] is None
 
+    def test_metadata_filter_all_fields(self):
+        cap = ragradar_capture.start("q", pipeline="test")
+        cap.metadata_filter(
+            applied=True,
+            candidate_count=10,
+            excluded_count=4,
+            filters={"source": "internal"},
+        )
+        cap.response("r")
+        filt = self._stored_record()["filter"]
+        assert filt == {
+            "applied": True,
+            "candidate_count": 10,
+            "excluded_count": 4,
+            "filters": {"source": "internal"},
+        }
+
+    def test_metadata_filter_defaults(self):
+        cap = ragradar_capture.start("q", pipeline="test")
+        cap.metadata_filter(applied=False)
+        cap.response("r")
+        filt = self._stored_record()["filter"]
+        assert filt["applied"] is False
+        assert filt["candidate_count"] is None
+        assert filt["excluded_count"] is None
+        assert filt["filters"] is None
+
+    def test_no_metadata_filter_call_leaves_filter_none(self):
+        cap = ragradar_capture.start("q", pipeline="test")
+        cap.response("r")
+        assert self._stored_record()["filter"] is None
+
     def test_token_usage_total_derived(self):
         ragradar_capture.capture(
             "q",
@@ -466,6 +498,13 @@ class TestThreadLocal:
         assert cap._record.cache is not None
         assert cap._record.cache.hit is True
         assert cap._record.cache.similarity_score == 0.95
+
+    def test_metadata_filter_proxy_routes_to_active_capture(self):
+        cap = ragradar_capture.start("proxy test", pipeline="test")
+        ragradar_capture.metadata_filter(applied=True, candidate_count=10, excluded_count=3)
+        assert cap._record.filter is not None
+        assert cap._record.filter.applied is True
+        assert cap._record.filter.excluded_count == 3
 
     def test_proxy_without_active_capture_is_silent(self):
         ragradar_capture.chunks([])

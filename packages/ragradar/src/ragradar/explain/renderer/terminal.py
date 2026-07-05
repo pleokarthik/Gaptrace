@@ -14,6 +14,9 @@ from ragradar.explain.analyzers import (
     history as history_mod,
 )
 from ragradar.explain.analyzers import (
+    metadata_filter as metadata_filter_mod,
+)
+from ragradar.explain.analyzers import (
     scores as scores_mod,
 )
 from ragradar.explain.analyzers import (
@@ -188,6 +191,29 @@ def _render_semantic_cache(result: dict, full: bool) -> Panel:
     return Panel("\n".join(lines), title="Cache behavior", border_style=style)
 
 
+def _render_metadata_filter(result: dict, full: bool) -> Panel:
+    if not result["applied"]:
+        return Panel("Not applied", title="Metadata Filter", border_style="white")
+
+    ratio = result["filtered_exclusion_ratio"]
+    style = "white" if ratio is None else "green" if ratio == 0 else "yellow" if ratio <= 0.3 else "red"
+
+    lines = ["Applied: yes"]
+    if result["candidate_count"] is not None:
+        lines.append(f"Candidates: {result['candidate_count']}")
+    if result["excluded_count"] is not None:
+        lines.append(f"Excluded:   {result['excluded_count']}")
+    if ratio is not None:
+        lines.append(f"Excluded ratio: {ratio:.0%}")
+    else:
+        lines.append("Excluded ratio: n/a (candidate/excluded counts not captured)")
+
+    if full and result["filters"]:
+        lines.append(f"\nFilters: {result['filters']}")
+
+    return Panel("\n".join(lines), title="Metadata Filter", border_style=style)
+
+
 _ANALYZERS = [
     (tokens_mod, _render_tokens),
     (scores_mod, _render_scores),
@@ -265,6 +291,11 @@ def render(record: RunRecord, full: bool = False, run_row: dict | None = None) -
         cache_result = semantic_cache_mod.analyze(record, policy)
         if cache_result is not None:
             console.print(_render_semantic_cache(cache_result, full))
+
+    if record.filter is not None:
+        filter_result = metadata_filter_mod.analyze(record)
+        if filter_result is not None:
+            console.print(_render_metadata_filter(filter_result, full))
 
     if run_row is not None:
         eval_panel = _render_eval_scores(run_row)

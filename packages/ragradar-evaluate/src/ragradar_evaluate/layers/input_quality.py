@@ -271,6 +271,35 @@ def score_cache_risk(record: RunRecord, policy: InputQualityPolicy) -> dict | No
     }
 
 
+def score_filter_risk(record: RunRecord) -> dict | None:
+    """Filter-risk family: how much of the candidate pool did a metadata
+    filter exclude before retrieval/scoring ever saw it? Pure.
+
+    Like score_cache_risk, this one is not applicable — and returns None
+    — for a record that never ran a metadata filter (record.filter is
+    None or record.filter.applied is False); callers should treat that
+    the same as "skip this metric". It is also not applicable when
+    candidate_count or excluded_count was not captured, or candidate_count
+    is not a positive number — there is no denominator to compute
+    filtered_exclusion_ratio against, and a 0.0 ratio would misrepresent
+    that as "nothing was excluded" rather than "we don't know".
+    """
+    filt = record.filter
+    if filt is None or not filt.applied:
+        return None
+
+    candidates = filt.candidate_count
+    excluded = filt.excluded_count
+    if candidates is None or excluded is None or candidates <= 0:
+        return None
+
+    return {
+        "filtered_exclusion_ratio": excluded / candidates,
+        "filter_excluded_count": excluded,
+        "filter_candidate_count": candidates,
+    }
+
+
 # Values rounded (to 4 places) for display/persistence only. Everything
 # else a family returns is an int, a string, None, or already rounded at
 # computation (score_variance).
@@ -281,6 +310,7 @@ _ROUND_KEYS = (
     "low_score_chunk_ratio",
     "cache_similarity_score",
     "cache_threshold",
+    "filtered_exclusion_ratio",
 )
 
 
@@ -348,6 +378,10 @@ def check_policy_violations(
         and values.get("relevance_scores")
     ):
         violations.append("min_chunk_relevance_score")
+
+    val = values.get("filtered_exclusion_ratio")
+    if val is not None and val > policy.max_filtered_exclusion_ratio:
+        violations.append("max_filtered_exclusion_ratio")
 
     return violations
 

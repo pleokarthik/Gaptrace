@@ -18,6 +18,7 @@ from ragradar_capture import (
     commit,
     context,
     history,
+    metadata_filter,
     response,
     semantic_cache,
     set_strict,
@@ -28,6 +29,7 @@ from ragradar_core.schema import (
     CacheEvent,
     CacheRecord,
     ChunkRecord,
+    FilterRecord,
     RunRecord,
     TokenBudget,
     TokenUsage,
@@ -56,6 +58,7 @@ __all__ = [
     "response",
     "cache",
     "semantic_cache",
+    "metadata_filter",
     "tool_call",
     "commit",
     # Evaluation
@@ -75,4 +78,5 @@ __all__ = [
     "CacheRecord",
     "ToolCallRecord",
     "RunRecord",
+    "FilterRecord",
 ]

@@ -70,6 +70,8 @@ class TestStory2CaptureThenEvaluate:
         for name in INPUT_METRICS:
             if name == "cache_risk":
                 continue  # this run never checked a semantic cache -- not applicable.
+            if name == "filter_risk":
+                continue  # this run never applied a metadata filter -- not applicable.
             assert name in result.metrics
 
 
@@ -125,6 +127,8 @@ class TestStory6FullEvaluateWithMockedJudge:
         for name in INPUT_METRICS:
             if name == "cache_risk":
                 continue  # this run never checked a semantic cache -- not applicable.
+            if name == "filter_risk":
+                continue  # this run never applied a metadata filter -- not applicable.
             assert name in result.metrics
         assert result.risk_score is not None
 

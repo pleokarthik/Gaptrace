@@ -1,9 +1,11 @@
 from dataclasses import asdict
 
+from ragradar_core.coerce import coerce_filter_record
 from ragradar_core.schema import (
     CacheEvent,
     CacheRecord,
     ChunkRecord,
+    FilterRecord,
     RunRecord,
     TokenBudget,
     TokenUsage,
@@ -197,6 +199,36 @@ class TestChildDataclassRoundTrips:
         assert minimal.result is None
         assert minimal.error is None
         assert minimal.latency_ms is None
+
+    def test_filter_record(self):
+        full = FilterRecord(
+            applied=True,
+            candidate_count=12,
+            excluded_count=4,
+            filters={"source": "internal"},
+        )
+        minimal = FilterRecord(applied=False)
+        for original in (full, minimal):
+            assert asdict(FilterRecord(**asdict(original))) == asdict(original)
+        assert minimal.candidate_count is None
+        assert minimal.excluded_count is None
+        assert minimal.filters is None
+
+
+class TestCoerceFilterRecord:
+    def test_valid_mapping_coerced(self):
+        result = coerce_filter_record(
+            {"applied": True, "candidate_count": 10, "excluded_count": 3}
+        )
+        assert isinstance(result, FilterRecord)
+        assert result.applied is True
+        assert result.candidate_count == 10
+        assert result.excluded_count == 3
+        assert result.filters is None
+
+    def test_dataclass_passthrough(self):
+        original = FilterRecord(applied=True, candidate_count=5, excluded_count=1)
+        assert coerce_filter_record(original) is original
 
 
 class TestFullRunRecord:

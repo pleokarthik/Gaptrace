@@ -25,6 +25,7 @@ from ragradar_core.schema import (
     CacheEvent,
     CacheRecord,
     ChunkRecord,
+    FilterRecord,
     RunRecord,
     TokenBudget,
     TokenUsage,
@@ -179,6 +180,19 @@ def coerce_cache_record(cache) -> CacheRecord:
     raise TypeError(f"Cannot coerce {type(cache).__name__} into a cache record: {cache!r}")
 
 
+def coerce_filter_record(filt) -> FilterRecord:
+    """Coerce a metadata-filter check. Pure.
+
+    Accepts a FilterRecord (passed through untouched) or a dict with at
+    least "applied".
+    """
+    if isinstance(filt, FilterRecord):
+        return filt
+    if isinstance(filt, Mapping):
+        return FilterRecord(**filt)
+    raise TypeError(f"Cannot coerce {type(filt).__name__} into a filter record: {filt!r}")
+
+
 def coerce_token_usage(usage) -> TokenUsage:
     """Coerce token usage. Pure.
 
@@ -241,4 +255,5 @@ def coerce_run_record(record: RunRecord) -> RunRecord:
             coerce_token_usage(record.token_usage) if record.token_usage is not None else None
         ),
         cache=(coerce_cache_record(record.cache) if record.cache is not None else None),
+        filter=(coerce_filter_record(record.filter) if record.filter is not None else None),
     )

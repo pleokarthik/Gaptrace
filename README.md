@@ -97,7 +97,7 @@ ragradar-evaluate policy show
 
 ## What ragradar explain shows
 
-Seven analysis factors, computed deterministically from captured data.
+Eight analysis factors, computed deterministically from captured data.
 Each factor is skipped silently if the required data was not captured.
 
 ```
@@ -107,6 +107,7 @@ Chunk scores      — retrieval + rerank score distribution
 Truncation        — which chunks were trimmed, at what score
 Dropped history   — what was evicted, why, what survived
 Cache hits        — hit/miss ratio per chunk
+Metadata filter   — candidates excluded before scoring, exclusion ratio
 Final prompt      — assembled prompt as-is
 ```
 
@@ -136,6 +137,12 @@ import ragradar
 
 cap = ragradar.start(query="what is RRF?", pipeline="my_project")
 
+cap.metadata_filter(                            # before retrieval — candidates
+    applied=True,                               # excluded by a metadata filter
+    candidate_count=12,
+    excluded_count=3,
+    filters={"source": "internal"},
+)
 cap.chunks([                                    # after retrieval — only
     {"content": "RRF combines rankings from multiple retrievers.",   # "content" is required
      "retrieval_score": 0.9, "rerank_score": 0.95},
@@ -298,6 +305,7 @@ duplicates            path + window + semantic duplicate detection
 truncation            were high-score chunks cut?
 token_efficiency      headroom, low-score chunk ratio
 coherence             source domain count, score variance
+filter_risk           candidate-exclusion ratio from metadata filtering
 ```
 
 **Output metrics (RAGAS, LLM-as-judge — costs LLM calls)**

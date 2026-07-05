@@ -6,6 +6,7 @@ from ragradar_core.coerce import (
     coerce_cache_events,
     coerce_cache_record,
     coerce_chunks,
+    coerce_filter_record,
     coerce_token_budget,
     coerce_token_usage,
     coerce_tool_call,
@@ -203,6 +204,33 @@ class Capture:
         except Exception as e:
             _handle_error("capture.semantic_cache()", e)
 
+    def metadata_filter(
+        self,
+        applied: bool,
+        candidate_count: int | None = None,
+        excluded_count: int | None = None,
+        filters: dict | None = None,
+    ) -> None:
+        """Record the metadata-filter stage: whether a metadata filter ran
+        before retrieval/scoring, and how many candidates it excluded.
+
+        This is the pre-scoring filter stage — a candidate excluded here
+        never reaches relevance/rerank scoring, distinct from truncation
+        (which happens after scoring). Mutates this capture only (store
+        write happens at commit). Never raises unless strict mode is on.
+        """
+        try:
+            self._record.filter = coerce_filter_record(
+                {
+                    "applied": applied,
+                    "candidate_count": candidate_count,
+                    "excluded_count": excluded_count,
+                    "filters": filters,
+                }
+            )
+        except Exception as e:
+            _handle_error("capture.metadata_filter()", e)
+
     def tool_call(self, call: ToolCallRecord | dict) -> None:
         """Append one tool call (ToolCallRecord or dict) — never replaces.
 
@@ -390,6 +418,21 @@ def semantic_cache(
         _get_logger().error("semantic_cache() called with no active capture")
         return
     cap.semantic_cache(checked, hit, similarity_score, threshold, cached_query, cached_at, registered)
+
+
+def metadata_filter(
+    applied: bool,
+    candidate_count: int | None = None,
+    excluded_count: int | None = None,
+    filters: dict | None = None,
+) -> None:
+    """Proxy for the active capture's .metadata_filter(). Mutates the
+    active capture; logs and no-ops if there is none."""
+    cap = get_active_capture()
+    if cap is None:
+        _get_logger().error("metadata_filter() called with no active capture")
+        return
+    cap.metadata_filter(applied, candidate_count, excluded_count, filters)
 
 
 def tool_call(call: ToolCallRecord | dict) -> None:

@@ -150,6 +150,24 @@ class CacheRecord:
 
 @_flexible
 @dataclass
+class FilterRecord:
+    """Whether a metadata filter ran before retrieval/scoring, and how many
+    candidate chunks it excluded.
+
+    Advanced/typed path — ``cap.metadata_filter(...)`` builds this from
+    its keyword arguments. ``filters`` is an opaque dict of the applied
+    filter criteria (e.g. {"source": "internal"}) for display only, not
+    scored.
+    """
+
+    applied: bool
+    candidate_count: Optional[int] = None
+    excluded_count: Optional[int] = None
+    filters: Optional[dict] = None
+
+
+@_flexible
+@dataclass
 class RunRecord:
     """The complete captured record of one pipeline run.
 
@@ -174,6 +192,7 @@ class RunRecord:
     model: Optional[str] = None
     token_usage: Optional[TokenUsage] = None
     cache: Optional[CacheRecord] = None
+    filter: Optional[FilterRecord] = None
 
     def to_json(self) -> dict:
         """This record as a plain, JSON-serializable dict. Pure."""
@@ -204,4 +223,6 @@ class RunRecord:
             data["token_usage"] = TokenUsage(**data["token_usage"])
         if data.get("cache") is not None:
             data["cache"] = CacheRecord(**data["cache"])
+        if data.get("filter") is not None:
+            data["filter"] = FilterRecord(**data["filter"])
         return cls(**data)

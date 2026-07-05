@@ -2,6 +2,7 @@ from ragradar_core.schema import (
     CacheEvent,
     CacheRecord,
     ChunkRecord,
+    FilterRecord,
     RunRecord,
     TokenBudget,
     TokenUsage,
@@ -42,4 +43,5 @@ __all__ = [
     "CacheRecord",
     "ToolCallRecord",
     "RunRecord",
+    "FilterRecord",
 ]

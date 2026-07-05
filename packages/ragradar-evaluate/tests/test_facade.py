@@ -25,6 +25,7 @@ ALL_METRICS = {
     "token_efficiency",
     "coherence",
     "cache_risk",
+    "filter_risk",
     "faithfulness",
     "answer_relevancy",
     "context_precision",
@@ -33,7 +34,7 @@ ALL_METRICS = {
 
 
 class TestAvailableMetrics:
-    def test_all_ten_present(self):
+    def test_all_metrics_present(self):
         metrics = available_metrics()
         assert set(metrics) == ALL_METRICS
 
@@ -103,12 +104,18 @@ class TestCompleteEval:
         for name in INPUT_METRICS:
             if name == "cache_risk":
                 continue  # full_record never checked a semantic cache -- not applicable.
+            if name == "filter_risk":
+                continue  # full_record never applied a metadata filter -- not applicable.
             assert name in result.metrics, f"{name} missing from complete eval"
         for name in ("faithfulness", "answer_relevancy", "context_precision"):
             assert result.metrics[name] == fake_ragas.scores[name]
 
         # cache_risk is legitimately not-applicable (no cache data), not missing data.
         assert result.skipped["cache_risk"] == "not applicable: run never checked a semantic cache"
+        # filter_risk is legitimately not-applicable (no filter data), not missing data.
+        assert (
+            result.skipped["filter_risk"] == "not applicable: run never applied a metadata filter"
+        )
         # context_recall needs ground_truth -- skipped with the reason.
         assert result.skipped["context_recall"] == "requires ground_truth"
         assert result.risk_score is not None
@@ -129,6 +136,11 @@ class TestChunklessRecord:
                 # No chunks AND no cache data -- skipped for the cache reason,
                 # not the chunks reason.
                 assert "semantic cache" in result.skipped[name]
+                continue
+            if name == "filter_risk":
+                # No chunks AND no filter data -- skipped for the filter reason,
+                # not the chunks reason.
+                assert "metadata filter" in result.skipped[name]
                 continue
             assert "no chunks" in result.skipped[name]
         for name in OUTPUT_METRICS:
@@ -379,4 +391,62 @@ class TestCacheRiskIntegration:
         for name in INPUT_METRICS:
             if name == "cache_risk":
                 continue
+            if name == "filter_risk":
+                continue
             assert name in result.metrics
+
+
+class TestFilterRiskIntegration:
+    """filter_risk is the other input metric that keys off a field besides
+    record.chunks (record.filter) -- mirrors TestCacheRiskIntegration."""
+
+    def test_fires_with_no_chunks_when_filter_applied(self):
+        from ragradar_core.schema import FilterRecord
+
+        rec = RunRecord(
+            query="q",
+            response="r",
+            filter=FilterRecord(applied=True, candidate_count=10, excluded_count=4),
+        )
+        result = evaluate(rec, metrics=["filter_risk"], save=False)
+
+        assert "filter_risk" not in result.skipped
+        assert result.metrics["filter_risk"]["filtered_exclusion_ratio"] == 0.4
+
+    def test_skipped_as_not_applicable_when_filter_never_applied(self, full_record):
+        result = evaluate(full_record, metrics=["filter_risk"], save=False)
+        assert (
+            result.skipped["filter_risk"] == "not applicable: run never applied a metadata filter"
+        )
+        assert "filter_risk" not in result.metrics
+
+
+class TestFilterRiskCheckFactor:
+    """filtered_exclusion_ratio is advisory-only in check() -- surfaced via
+    _CHECK_FACTORS/problems, never folded into the weighted risk_score
+    (locked design decision: zero changes to risk.py/_DEFAULT_WEIGHTS)."""
+
+    def test_check_flags_high_exclusion_ratio(self):
+        from ragradar_core.schema import FilterRecord
+
+        rec = RunRecord(
+            query="q",
+            response="r",
+            filter=FilterRecord(applied=True, candidate_count=10, excluded_count=6),
+        )
+        result = check(rec, policy=InputQualityPolicy(max_filtered_exclusion_ratio=0.3))
+
+        assert result.factors["filtered_exclusion_ratio"]["status"] == "fail"
+        assert any("metadata filter" in p for p in result.problems)
+
+    def test_check_ok_on_low_exclusion_ratio(self):
+        from ragradar_core.schema import FilterRecord
+
+        rec = RunRecord(
+            query="q",
+            response="r",
+            filter=FilterRecord(applied=True, candidate_count=10, excluded_count=1),
+        )
+        result = check(rec, policy=InputQualityPolicy(max_filtered_exclusion_ratio=0.3))
+
+        assert result.factors["filtered_exclusion_ratio"]["status"] == "ok"

@@ -1,9 +1,11 @@
 from datetime import datetime, timedelta, timezone
 
-from ragradar_core.schema import CacheRecord, ChunkRecord, RunRecord, TokenBudget
+from ragradar_core.schema import CacheRecord, ChunkRecord, FilterRecord, RunRecord, TokenBudget
 from ragradar_evaluate.layers.input_quality import (
+    check_policy_violations,
     cosine_similarity,
     score_cache_risk,
+    score_filter_risk,
     score_input_quality,
 )
 from ragradar_evaluate.policy.schema import InputQualityPolicy
@@ -336,6 +338,52 @@ class TestCacheRisk:
         )
         result = score_cache_risk(rec, InputQualityPolicy())
         assert result["cache_registered"] is True
+
+
+class TestFilterRisk:
+    def _record(self, filt: FilterRecord | None) -> RunRecord:
+        return RunRecord(query="q", response="r", filter=filt)
+
+    def test_no_filter_data_returns_none(self):
+        rec = self._record(None)
+        assert score_filter_risk(rec) is None
+
+    def test_not_applied_returns_none(self):
+        rec = self._record(FilterRecord(applied=False))
+        assert score_filter_risk(rec) is None
+
+    def test_applied_missing_candidate_count_returns_none(self):
+        rec = self._record(FilterRecord(applied=True, excluded_count=3))
+        assert score_filter_risk(rec) is None
+
+    def test_applied_missing_excluded_count_returns_none(self):
+        rec = self._record(FilterRecord(applied=True, candidate_count=10))
+        assert score_filter_risk(rec) is None
+
+    def test_applied_zero_candidate_count_returns_none(self):
+        rec = self._record(FilterRecord(applied=True, candidate_count=0, excluded_count=0))
+        assert score_filter_risk(rec) is None
+
+    def test_applied_with_counts_computes_ratio(self):
+        rec = self._record(FilterRecord(applied=True, candidate_count=10, excluded_count=4))
+        result = score_filter_risk(rec)
+        assert result["filtered_exclusion_ratio"] == 0.4
+        assert result["filter_excluded_count"] == 4
+        assert result["filter_candidate_count"] == 10
+
+    def test_policy_violation_fires_on_high_exclusion_ratio(self):
+        rec = self._record(FilterRecord(applied=True, candidate_count=10, excluded_count=4))
+        policy = InputQualityPolicy(max_filtered_exclusion_ratio=0.3)
+        values = score_filter_risk(rec)
+        violations = check_policy_violations(values, policy, rec)
+        assert "max_filtered_exclusion_ratio" in violations
+
+    def test_policy_passes_on_low_exclusion_ratio(self):
+        rec = self._record(FilterRecord(applied=True, candidate_count=10, excluded_count=1))
+        policy = InputQualityPolicy(max_filtered_exclusion_ratio=0.3)
+        values = score_filter_risk(rec)
+        violations = check_policy_violations(values, policy, rec)
+        assert "max_filtered_exclusion_ratio" not in violations
 
 
 class TestCosineSimilarity:

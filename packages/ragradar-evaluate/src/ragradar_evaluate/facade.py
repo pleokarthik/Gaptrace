@@ -91,6 +91,16 @@ _METRICS: dict[str, MetricInfo] = {
             "semantic cache.",
         ),
         MetricInfo(
+            "filter_risk",
+            "input",
+            "free",
+            ("filter",),
+            "Metadata-filter exclusion ratio: how much of the candidate pool "
+            "was excluded before scoring ever saw it. Not applicable to runs "
+            "that never applied a metadata filter (or didn't report "
+            "candidate/excluded counts).",
+        ),
+        MetricInfo(
             "faithfulness",
             "output",
             "llm",
@@ -133,6 +143,7 @@ _INPUT_FN = {
     "token_efficiency": "score_token_efficiency",
     "coherence": "score_coherence",
     "cache_risk": "score_cache_risk",
+    "filter_risk": "score_filter_risk",
 }
 
 # The six factors check() compares against thresholds, with the direction
@@ -174,6 +185,12 @@ _CHECK_FACTORS = [
         "higher_bad",
         "max_low_score_chunk_ratio",
         "{value:.0%} of chunks scored below 0.5 (max {threshold:.0%})",
+    ),
+    (
+        "filtered_exclusion_ratio",
+        "higher_bad",
+        "max_filtered_exclusion_ratio",
+        "{value:.0%} of candidates excluded by metadata filter (max {threshold:.0%})",
     ),
 ]
 
@@ -374,6 +391,9 @@ def evaluate(
             continue
         if "cache" in info.requires and (record.cache is None or not record.cache.checked):
             result.skipped[name] = "not applicable: run never checked a semantic cache"
+            continue
+        if "filter" in info.requires and (record.filter is None or not record.filter.applied):
+            result.skipped[name] = "not applicable: run never applied a metadata filter"
             continue
         family_fn = getattr(input_quality, _INPUT_FN[name])
         if "cache" in info.requires:

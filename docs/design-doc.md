@@ -407,7 +407,7 @@ The user enters a number to select a run. Invalid input or Enter cancels the ope
 
 ## 7. Analysis — ragradar explain
 
-Seven analysis factors are computed deterministically at read time from captured run data. Each factor is implemented as a standalone analyzer module in `ragradar/explain/analyzers/`. Every analyzer follows the same contract: it takes a `RunRecord`, checks whether the required data is present, and returns either a structured dict or `None`. The renderer skips any factor that returned `None` — there is no error, no placeholder, no "data not available" message.
+Nine analysis factors are computed deterministically at read time from captured run data. Each factor is implemented as a standalone analyzer module in `ragradar/explain/analyzers/`. Every analyzer follows the same contract: it takes a `RunRecord`, checks whether the required data is present, and returns either a structured dict or `None`. The renderer skips any factor that returned `None` — there is no error, no placeholder, no "data not available" message.
 
 ### tokens.py
 

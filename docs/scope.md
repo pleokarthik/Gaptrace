@@ -238,7 +238,7 @@ Disambiguation screen when multiple matches:
 
 **Analysis — ragradar explain**
 
-Seven factors. Each computed deterministically at read time from captured run data. Skipped silently if required data not present.
+Nine factors. Each computed deterministically at read time from captured run data. Skipped silently if required data not present.
 
 ```
 Token usage       — per-section breakdown, headroom, model limit
@@ -247,6 +247,8 @@ Chunk scores      — retrieval score + rerank score distribution
 Truncation        — which chunks trimmed, at what boundary, score of truncated chunks
 Dropped history   — pre/post eviction diff, eviction reason
 Cache hits        — hit/miss ratio, which chunks came from cache
+Cache behavior    — semantic-cache hit/miss, borderline similarity, stale-hit age
+Metadata filter   — candidates excluded before scoring, exclusion ratio
 Final prompt      — assembled prompt as-is
 ```
 
@@ -367,7 +369,7 @@ separate `session.py` module.)
 - All date and pipeline filters work correctly
 - `ragradar explain` with no arg explains latest run
 - `ragradar explain s2r3` explains correct run
-- All seven analysis factors render when data present
+- All nine analysis factors render when data present
 - Factors skip silently when data absent — no errors
 - `ragradar explain --html` writes file to `~/.ragradar/reports/`
 - `ragradar diff s2r3 s2r1` produces side-by-side comparison

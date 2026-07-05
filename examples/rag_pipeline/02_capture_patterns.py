@@ -67,8 +67,16 @@ def _sample_chunks():
 
 
 def pattern_full_fields():
-    """Populate every optional RunRecord field -- chunks, context, history, cache, tool calls, response -- in one staged capture."""
+    """Populate every optional RunRecord field -- metadata filter, chunks, context, history, cache, tool calls, response -- in one staged capture."""
     cap = ragradar.start(query="what is RRF and how does it normalize scores?", pipeline=PIPELINE)
+
+    # Metadata filter runs before retrieval; excluded candidates never reach scoring.
+    cap.metadata_filter(
+        applied=True,
+        candidate_count=6,
+        excluded_count=2,
+        filters={"source": "internal"},
+    )
 
     chunks = _sample_chunks()
     cap.chunks(chunks)

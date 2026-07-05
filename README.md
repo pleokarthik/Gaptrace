@@ -97,7 +97,7 @@ ragradar-evaluate policy show
 
 ## What ragradar explain shows
 
-Eight analysis factors, computed deterministically from captured data.
+Nine analysis factors, computed deterministically from captured data.
 Each factor is skipped silently if the required data was not captured.
 
 ```
@@ -107,13 +107,15 @@ Chunk scores      — retrieval + rerank score distribution
 Truncation        — which chunks were trimmed, at what score
 Dropped history   — what was evicted, why, what survived
 Cache hits        — hit/miss ratio per chunk
+Cache behavior    — semantic-cache hit/miss, borderline similarity, stale-hit age
 Metadata filter   — candidates excluded before scoring, exclusion ratio
 Final prompt      — assembled prompt as-is
 ```
 
-The example pipeline is designed to trigger all seven factors visibly:
+The example pipeline is designed to trigger all eight factors visibly:
 low headroom (4.8%), window duplicates, one high-score truncation
-(rerank 0.88, truncated=True), two evicted history turns, one cache hit.
+(rerank 0.88, truncated=True), two evicted history turns, one cache hit,
+two candidates excluded by a metadata filter (33% exclusion).
 
 ---
 

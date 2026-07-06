@@ -106,6 +106,7 @@ class RunRecord:
     query:           str                           # required
     response:        str                           # required
     chunks:          Optional[list[ChunkRecord]]   # retrieval stage
+    requested_chunk_count: Optional[int]           # retrieval stage (top_k ask)
     final_prompt:    Optional[str]                 # assembly stage
     token_budget:    Optional[TokenBudget]         # assembly stage
     history_pre:     Optional[list[Turn]]          # history management
@@ -119,7 +120,9 @@ class RunRecord:
     filter:          Optional[FilterRecord]        # metadata-filter stage
 ```
 
-This optionality contract means a pipeline instrumented with only `ragradar_capture.capture(query, response)` produces a valid RunRecord with two fields. A fully instrumented pipeline populates all fourteen. The analysis tools (ragradar explain, ragradar-evaluate) check for the presence of each field before computing — if `chunks` is None, the duplicates analyzer returns None and the renderer skips that panel silently.
+This optionality contract means a pipeline instrumented with only `ragradar_capture.capture(query, response)` produces a valid RunRecord with two fields. A fully instrumented pipeline populates all fifteen. The analysis tools (ragradar explain, ragradar-evaluate) check for the presence of each field before computing — if `chunks` is None, the duplicates analyzer returns None and the renderer skips that panel silently.
+
+`requested_chunk_count` is a bare `Optional[int]` scalar, the same shape as `eviction_reason` — no wrapper dataclass, since it has no sibling fields. It is also the first capture-side schema addition since `cache`/`filter` (the semantic-cache and metadata-filter stages): every analysis factor added between then and now (`score_degeneracy`, `score_margin`) was a pure derivation over data `RunRecord` already carried, but `candidate_underfill_risk` needed a genuinely new capture surface — the retriever's `top_k` ask isn't otherwise recoverable from `len(chunks)` alone.
 
 ### ChunkRecord
 
@@ -308,7 +311,7 @@ run_id = cap.response(response, token_usage=usage,
 
 `ragradar_capture.start()` creates a `Capture` instance, registers it as this thread's active capture, and returns it. Each stage method (`chunks`, `context`, `history`, `cache`, `tool_call`, `response`) sets fields on the internal `RunRecord`. Calling `cap.response()` automatically calls `cap.commit()`, which writes the accumulated record to the store and returns the run id (also available afterwards as `cap.run_id`; `None` before commit). Calling `commit()` explicitly after `response()` is safe — `commit()` is idempotent and returns the same id without writing again.
 
-Each stage method accepts either typed dataclass instances or plain dicts. For example, `cap.chunks()` accepts a list where each element is either a `ChunkRecord` or a dict that will be unpacked into `ChunkRecord(**d)`. This means the developer does not need to import the dataclass types if they prefer to pass dicts.
+Each stage method accepts either typed dataclass instances or plain dicts. For example, `cap.chunks()` accepts a list where each element is either a `ChunkRecord` or a dict that will be unpacked into `ChunkRecord(**d)`. This means the developer does not need to import the dataclass types if they prefer to pass dicts. `cap.chunks(chunks, requested_count=10)` additionally records the retriever's `top_k` ask onto `RunRecord.requested_chunk_count` — a bare optional int, unvalidated against `len(chunks)` — for `ragradar-evaluate`'s `score_score_underfill`.
 
 ### Thread-local active capture
 
@@ -326,7 +329,7 @@ For pipelines where staged instrumentation is not yet practical, `ragradar_captu
 run_id = ragradar_capture.capture(query, response, pipeline="my_project")
 ```
 
-This creates a Capture internally, sets the response, routes the optional keyword-only arguments to the appropriate stage fields (`chunks=`, `final_prompt=`, `token_budget=`, `history_pre=`/`history_post=`, `eviction_reason=`, `cache_events=`, `tool_calls=`, `model=`, `token_usage=`), commits immediately, and returns the run id. The signature is explicit — a misspelled keyword raises `TypeError` at the call site rather than being silently dropped.
+This creates a Capture internally, sets the response, routes the optional keyword-only arguments to the appropriate stage fields (`chunks=`, `requested_chunk_count=`, `final_prompt=`, `token_budget=`, `history_pre=`/`history_post=`, `eviction_reason=`, `cache_events=`, `tool_calls=`, `model=`, `token_usage=`), commits immediately, and returns the run id. The signature is explicit — a misspelled keyword raises `TypeError` at the call site rather than being silently dropped. `requested_chunk_count=` is only recorded when `chunks=` is also given.
 
 ### Failure contract
 
@@ -410,7 +413,7 @@ The user enters a number to select a run. Invalid input or Enter cancels the ope
 
 ## 7. Analysis — ragradar explain
 
-Ten analysis factors are computed deterministically at read time from captured run data. Each factor is implemented as a standalone analyzer module in `ragradar/explain/analyzers/`. Every analyzer follows the same contract: it takes a `RunRecord`, checks whether the required data is present, and returns either a structured dict or `None`. The renderer skips any factor that returned `None` — there is no error, no placeholder, no "data not available" message.
+Eleven analysis factors are computed deterministically at read time from captured run data. Each factor is implemented as a standalone analyzer module in `ragradar/explain/analyzers/`. Every analyzer follows the same contract: it takes a `RunRecord`, checks whether the required data is present, and returns either a structured dict or `None`. The renderer skips any factor that returned `None` — there is no error, no placeholder, no "data not available" message.
 
 ### tokens.py
 
@@ -460,6 +463,10 @@ Requires `filter`. Also rendered outside the generic loop, directly after semant
 
 Requires `chunks`. Not a separate analyzer entry in the generic loop either — like `semantic_cache.py`, the renderer calls it directly (rendered last, after the metadata filter) because it needs the active pipeline's `InputQualityPolicy`. Mirrors `ragradar-evaluate`'s `score_score_margin`: `top_second_margin` (top chunk score minus the runner-up's, rerank falling back to retrieval, same convention as `degeneracy.py`) and `threshold_margin` (top chunk score minus `min_top_chunk_score`, diagnostic-only). Returns `None` with fewer than two chunks carrying a usable score.
 
+### underfill.py
+
+Requires `chunks` and a captured `requested_chunk_count` (the retriever's `top_k` ask — see §3's `RunRecord` note on this being the first new capture-side field since `cache`/`filter`). Unlike `margin.py`/`semantic_cache.py`, this one needs no policy and no ordering control, so it's back in the generic `_ANALYZERS` loop rather than special-cased. Mirrors `ragradar-evaluate`'s `score_score_underfill`: `underfill_ratio` (`(requested - returned) / requested`, negative when more chunks came back than asked for) plus `requested_chunk_count`/`returned_chunk_count` as diagnostic context. Returns `None` when `requested_chunk_count` wasn't captured or isn't positive, or when `chunks` is `None`.
+
 ### Final prompt
 
 Not a separate analyzer — the renderer checks `record.final_prompt` directly. In compact mode, the first 500 characters are shown. In full mode, the entire prompt is displayed. In HTML mode, the prompt is rendered inside a `<pre>` block.
@@ -478,7 +485,7 @@ Not a separate analyzer — the renderer checks `record.final_prompt` directly. 
 
 ### Two-layer design
 
-The public API is task-shaped: `check(target)` answers "is this run healthy?" (all free input metrics vs the current standards — learned benchmark thresholds once ≥10 evaluated runs exist for the pipeline, policy defaults before that; `CheckResult.thresholds` says which); `evaluate(target, metrics=None, ground_truth=None, policy=None, save=True)` scores everything applicable or exactly the atomic metrics named, returning an `EvalResult` (per-metric results, `skipped` reasons, a single `errors` channel for both missing and failing RAGAS, `risk_score` that is `None` when input metrics weren't computed, and save semantics); `available_metrics()` lists the thirteen metrics with layer/cost/requirements. Targets are `sNrN` strings, committed `Capture` objects, or bare `RunRecord`s (which cannot be saved). `evaluate()` is the only persistence path — the CLI routes through it.
+The public API is task-shaped: `check(target)` answers "is this run healthy?" (all free input metrics vs the current standards — learned benchmark thresholds once ≥10 evaluated runs exist for the pipeline, policy defaults before that; `CheckResult.thresholds` says which); `evaluate(target, metrics=None, ground_truth=None, policy=None, save=True)` scores everything applicable or exactly the atomic metrics named, returning an `EvalResult` (per-metric results, `skipped` reasons, a single `errors` channel for both missing and failing RAGAS, `risk_score` that is `None` when input metrics weren't computed, and save semantics); `available_metrics()` lists the fourteen metrics with layer/cost/requirements. Targets are `sNrN` strings, committed `Capture` objects, or bare `RunRecord`s (which cannot be saved). `evaluate()` is the only persistence path — the CLI routes through it.
 
 Under the facade, evaluation is split into two layers that run independently. Layer 1 (input quality) is deterministic, requires no LLM, and uses only stdlib math; each metric family (relevance, duplicates, truncation, token_efficiency, coherence) is its own function, so selecting one never computes the others. Layer 2 (output quality) uses RAGAS with an LLM-as-judge, passing exactly the selected metric objects to the judge. The `--input-only` flag maps to the input metric set, and the RAGAS import is deferred — it happens inside the function body, not at module top level — so input-only evaluation runs even if RAGAS is not installed.
 
@@ -510,7 +517,9 @@ When `embedding_fn` is None, relevance falls back to the scores already on `Chun
 
 **Score degeneracy.** A chunk-score variance check — rerank score, falling back to retrieval score, across the run's chunks (chunks with neither score excluded). Near-zero variance means the retriever isn't discriminating between chunks at all, which points at a structural failure (a broken embedding or degraded index) rather than a normal relevance judgment call. Undefined (`None`) with fewer than two chunks carrying a usable score. Tracked under `chunk_score_variance` — deliberately not `score_variance`, which is already used by the coherence signal above (rerank-only, no fallback) and would otherwise collide in the merged output dict.
 
-**Score margin.** Two margin diagnostics around the top chunk's score, bundled into one function, `score_score_margin()`, rather than shipped as two competing factors. Like `score_cache_risk`, it takes the active policy directly — `threshold_margin` needs `min_top_chunk_score` mid-computation, not just a final compare — and is therefore gated separately in `evaluate()` rather than run by the `score_input_quality()` dispatcher above. `top_second_margin` (top chunk score minus the runner-up's, same rerank-falling-back-to-retrieval convention as score degeneracy) is THE CHECKED FACTOR: a thin margin means the retriever isn't decisively ahead on its top pick. `threshold_margin` (top chunk score minus `min_top_chunk_score`) is diagnostic-only — it rides on the boundary the `top_chunk_score` factor already owns, so it deliberately has no policy field and no `_CHECK_FACTORS` entry of its own; it is not a tenth checked factor, just context alongside the ninth. Returns `None` (not a partial dict) with fewer than two chunks carrying a usable score.
+**Score margin.** Two margin diagnostics around the top chunk's score, bundled into one function, `score_score_margin()`, rather than shipped as two competing factors. Like `score_cache_risk`, it takes the active policy directly — `threshold_margin` needs `min_top_chunk_score` mid-computation, not just a final compare — and is therefore gated separately in `evaluate()` rather than run by the `score_input_quality()` dispatcher above. `top_second_margin` (top chunk score minus the runner-up's, same rerank-falling-back-to-retrieval convention as score degeneracy) is THE CHECKED FACTOR: a thin margin means the retriever isn't decisively ahead on its top pick. `threshold_margin` (top chunk score minus `min_top_chunk_score`) is diagnostic-only — it rides on the boundary the `top_chunk_score` factor already owns, so it deliberately has no policy field and no `_CHECK_FACTORS` entry of its own; it is not itself a checked factor, just context alongside `top_second_margin`. Returns `None` (not a partial dict) with fewer than two chunks carrying a usable score.
+
+**Score underfill.** `score_score_underfill()` is the first input-quality factor built on a genuine new capture surface rather than a pure derivation over existing fields — see §3's note on `RunRecord.requested_chunk_count`. It is policy-free (no policy argument, unlike score margin/cache risk) but, like cache risk/filter risk, keys off data that may never have been captured, so it too is gated separately in `evaluate()` rather than run by the dispatcher. `underfill_ratio` (`(requested_chunk_count - len(chunks)) / requested_chunk_count`) is THE CHECKED FACTOR — negative when retrieval returned more than was asked for (never a violation), positive when it returned fewer. `requested_chunk_count`/`returned_chunk_count` ride alongside as diagnostic-only counts, the same primary-value-plus-counts shape as filter risk's `filtered_exclusion_ratio` plus its candidate/excluded counts. Returns `None` when `requested_chunk_count` was never captured, isn't positive, or `chunks` is `None`.
 
 **Policy violations.** Each signal is checked against the active `InputQualityPolicy`. Violations are collected as a list of field names (e.g., `["max_high_score_truncations", "min_token_headroom", "max_source_domains"]`). The `passes_policy` boolean is `True` only when the violations list is empty.
 
@@ -551,6 +560,7 @@ class InputQualityPolicy:
     max_filtered_exclusion_ratio: float = 0.3 # >30% excluded by a metadata filter is opaque
     min_score_variance:         float = 0.0001 # below this, chunk scores aren't discriminating
     min_top_second_margin:      float = 0.05  # top chunk should lead the runner-up by this much
+    max_underfill_ratio:        float = 0.2   # >20% short of the requested chunk count is a problem
 ```
 
 Policies are stored per-pipeline in the `policies` table as JSON. `load_policy(pipeline)` returns the stored policy or falls back to `InputQualityPolicy.default()` if none is set. `save_policy` writes a policy, `reset_policy` deletes it (reverting to defaults). The CLI exposes `ragradar-evaluate policy show`, `policy set <field> <value>`, and `policy reset`.

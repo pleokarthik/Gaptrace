@@ -259,6 +259,37 @@ class TestPrimitiveInputs:
         assert chunks[0]["token_count"] == coerce.estimate_tokens("only content given")
         assert chunks[0]["rerank_score"] == 0.9
 
+    def test_chunks_requested_count_recorded(self):
+        cap = ragradar_capture.start("q", pipeline="test")
+        cap.chunks([{"content": "a"}, {"content": "b"}], requested_count=5)
+        cap.response("r")
+        data = self._stored_record()
+        assert data["requested_chunk_count"] == 5
+        assert len(data["chunks"]) == 2
+
+    def test_chunks_without_requested_count_leaves_it_none(self):
+        cap = ragradar_capture.start("q", pipeline="test")
+        cap.chunks([{"content": "a"}])
+        cap.response("r")
+        assert self._stored_record()["requested_chunk_count"] is None
+
+    def test_capture_one_liner_requested_chunk_count(self):
+        run_id = ragradar_capture.capture(
+            "q",
+            "r",
+            chunks=[{"content": "a"}, {"content": "b"}],
+            requested_chunk_count=5,
+        )
+        assert run_id is not None
+        assert self._stored_record()["requested_chunk_count"] == 5
+
+    def test_capture_one_liner_requested_chunk_count_ignored_without_chunks(self):
+        run_id = ragradar_capture.capture("q", "r", requested_chunk_count=5)
+        assert run_id is not None
+        data = self._stored_record()
+        assert data["requested_chunk_count"] is None
+        assert data["chunks"] is None
+
     def test_chunk_without_content_still_errors(self):
         ragradar_capture.set_strict(True)
         cap = ragradar_capture.start("q", pipeline="test")
@@ -491,6 +522,11 @@ class TestThreadLocal:
         run_id = ragradar_capture.response("proxy response")
         assert run_id == cap.run_id
         assert run_id is not None
+
+    def test_chunks_proxy_threads_requested_count(self):
+        cap = ragradar_capture.start("proxy test", pipeline="test")
+        ragradar_capture.chunks([{"content": "a"}], requested_count=3)
+        assert cap._record.requested_chunk_count == 3
 
     def test_semantic_cache_proxy_routes_to_active_capture(self):
         cap = ragradar_capture.start("proxy test", pipeline="test")

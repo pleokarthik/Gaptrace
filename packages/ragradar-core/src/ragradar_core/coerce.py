@@ -231,6 +231,7 @@ def coerce_run_record(record: RunRecord) -> RunRecord:
         query=record.query,
         response=record.response,
         chunks=(coerce_chunks(record.chunks) if record.chunks is not None else None),
+        requested_chunk_count=record.requested_chunk_count,
         final_prompt=record.final_prompt,
         token_budget=(
             coerce_token_budget(record.token_budget, record.final_prompt)

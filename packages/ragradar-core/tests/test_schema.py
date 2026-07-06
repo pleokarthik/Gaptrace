@@ -1,6 +1,6 @@
 from dataclasses import asdict
 
-from ragradar_core.coerce import coerce_filter_record
+from ragradar_core.coerce import coerce_filter_record, coerce_run_record
 from ragradar_core.schema import (
     CacheEvent,
     CacheRecord,
@@ -229,6 +229,37 @@ class TestCoerceFilterRecord:
     def test_dataclass_passthrough(self):
         original = FilterRecord(applied=True, candidate_count=5, excluded_count=1)
         assert coerce_filter_record(original) is original
+
+
+class TestRequestedChunkCount:
+    def test_defaults_to_none(self):
+        rec = RunRecord(query="q", response="r")
+        assert rec.requested_chunk_count is None
+
+    def test_round_trips(self):
+        rec = RunRecord(
+            query="q",
+            response="r",
+            chunks=[ChunkRecord(chunk_id="c1", source_doc_id="d1", content="x", token_count=5)],
+            requested_chunk_count=8,
+        )
+        restored = RunRecord.from_json(rec.to_json())
+        assert restored.requested_chunk_count == 8
+
+    def test_coerce_run_record_passes_through(self):
+        rec = RunRecord(
+            query="q",
+            response="r",
+            chunks=[{"content": "x"}],
+            requested_chunk_count=5,
+        )
+        coerced = coerce_run_record(rec)
+        assert coerced.requested_chunk_count == 5
+
+    def test_coerce_run_record_passes_through_none(self):
+        rec = RunRecord(query="q", response="r")
+        coerced = coerce_run_record(rec)
+        assert coerced.requested_chunk_count is None
 
 
 class TestFullRunRecord:

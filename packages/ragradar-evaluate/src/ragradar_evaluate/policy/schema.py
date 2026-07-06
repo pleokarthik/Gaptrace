@@ -27,6 +27,7 @@ class InputQualityPolicy:
     max_filtered_exclusion_ratio: float = 0.3
     min_score_variance: float = 0.0001
     min_top_second_margin: float = 0.05
+    max_underfill_ratio: float = 0.2
 
     def to_dict(self) -> dict:
         """This policy as a plain, JSON-serializable dict. Pure."""

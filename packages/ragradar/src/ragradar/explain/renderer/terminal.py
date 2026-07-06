@@ -34,6 +34,9 @@ from ragradar.explain.analyzers import (
 from ragradar.explain.analyzers import (
     truncation as truncation_mod,
 )
+from ragradar.explain.analyzers import (
+    underfill as underfill_mod,
+)
 
 console = Console()
 
@@ -245,6 +248,19 @@ def _render_margin(result: dict, full: bool) -> Panel:
     return Panel("\n".join(lines), title="Score Margin", border_style=style)
 
 
+def _render_underfill(result: dict, full: bool) -> Panel:
+    ratio = result["underfill_ratio"]
+    style = "green" if ratio <= 0 else "yellow" if ratio <= 0.2 else "red"
+
+    lines = [
+        f"Requested: {result['requested_chunk_count']}",
+        f"Returned:  {result['returned_chunk_count']}",
+        f"Underfill ratio: {ratio:+.2%}",
+    ]
+
+    return Panel("\n".join(lines), title="Candidate Underfill", border_style=style)
+
+
 _ANALYZERS = [
     (tokens_mod, _render_tokens),
     (scores_mod, _render_scores),
@@ -253,6 +269,7 @@ _ANALYZERS = [
     (history_mod, _render_history),
     (cache_mod, _render_cache),
     (degeneracy_mod, _render_degeneracy),
+    (underfill_mod, _render_underfill),
 ]
 
 

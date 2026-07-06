@@ -79,7 +79,9 @@ def pattern_full_fields():
     )
 
     chunks = _sample_chunks()
-    cap.chunks(chunks)
+    # requested_count=6: the retriever asked for 6 candidates but only 4
+    # came back -- triggers ragradar explain's candidate-underfill signal.
+    cap.chunks(chunks, requested_count=6)
 
     prompt = (
         "System: answer using context.\n\nContext:\n"

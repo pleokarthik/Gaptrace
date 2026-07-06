@@ -72,6 +72,8 @@ class TestStory2CaptureThenEvaluate:
                 continue  # this run never checked a semantic cache -- not applicable.
             if name == "filter_risk":
                 continue  # this run never applied a metadata filter -- not applicable.
+            if name == "score_underfill":
+                continue  # this run never captured a requested_chunk_count -- not applicable.
             assert name in result.metrics
 
 
@@ -129,6 +131,8 @@ class TestStory6FullEvaluateWithMockedJudge:
                 continue  # this run never checked a semantic cache -- not applicable.
             if name == "filter_risk":
                 continue  # this run never applied a metadata filter -- not applicable.
+            if name == "score_underfill":
+                continue  # this run never captured a requested_chunk_count -- not applicable.
             assert name in result.metrics
         assert result.risk_score is not None
 

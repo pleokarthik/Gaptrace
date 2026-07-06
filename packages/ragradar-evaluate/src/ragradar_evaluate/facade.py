@@ -121,6 +121,16 @@ _METRICS: dict[str, MetricInfo] = {
             "means the retriever isn't decisively ahead on its top pick.",
         ),
         MetricInfo(
+            "score_underfill",
+            "input",
+            "free",
+            ("chunks",),
+            "Requested-vs-returned chunk count: underfill_ratio, how far "
+            "short retrieval landed of the captured requested_chunk_count "
+            "(top_k ask). Not applicable to runs that never captured a "
+            "requested_chunk_count.",
+        ),
+        MetricInfo(
             "faithfulness",
             "output",
             "llm",
@@ -166,6 +176,7 @@ _INPUT_FN = {
     "filter_risk": "score_filter_risk",
     "score_degeneracy": "score_score_degeneracy",
     "score_margin": "score_score_margin",
+    "score_underfill": "score_score_underfill",
 }
 
 # Metric families whose function needs the active policy passed in during
@@ -176,7 +187,7 @@ _INPUT_FN = {
 # output against the policy afterward instead.
 _POLICY_ARG_METRICS = {"cache_risk", "score_margin"}
 
-# The nine factors check() compares against thresholds, with the direction
+# The ten factors check() compares against thresholds, with the direction
 # in which a value is bad, the policy field naming the default threshold,
 # and a human-readable problem template.
 _CHECK_FACTORS = [
@@ -235,6 +246,12 @@ _CHECK_FACTORS = [
         "min_top_second_margin",
         "top-second margin {value:.2f} below {threshold:.2f} minimum "
         "(top chunk isn't decisively ahead of the runner-up)",
+    ),
+    (
+        "underfill_ratio",
+        "higher_bad",
+        "max_underfill_ratio",
+        "{value:.0%} short of the requested chunk count (max {threshold:.0%})",
     ),
 ]
 

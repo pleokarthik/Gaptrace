@@ -89,16 +89,21 @@ class Capture:
         commit failed in non-strict mode). Pure."""
         return self._run_id
 
-    def chunks(self, chunks: list) -> None:
+    def chunks(self, chunks: list, requested_count: int | None = None) -> None:
         """Record the retrieval stage: a list of chunks.
 
         Plain dicts need only "content" — ids and token counts are
         filled in (see ragradar_core.coerce); ChunkRecords pass through
-        untouched. Mutates this capture only (store write happens at
-        commit). Never raises unless strict mode is on.
+        untouched. requested_count records the retriever's top_k ask
+        (e.g. for candidate_underfill_risk) alongside the returned list
+        — it is a bare count, not validated against len(chunks). Mutates
+        this capture only (store write happens at commit). Never raises
+        unless strict mode is on.
         """
         try:
             self._record.chunks = coerce_chunks(chunks)
+            if requested_count is not None:
+                self._record.requested_chunk_count = requested_count
         except Exception as e:
             _handle_error("capture.chunks()", e)
 
@@ -286,6 +291,7 @@ def capture(
     response: str,
     *,
     chunks: list | None = None,
+    requested_chunk_count: int | None = None,
     final_prompt: str | None = None,
     token_budget: TokenBudget | dict | int | None = None,
     history_pre: list | None = None,
@@ -312,12 +318,14 @@ def capture(
     not **kwargs).
 
     token_budget is persisted whether or not final_prompt is given.
+    requested_chunk_count (the retriever's top_k ask) is only recorded
+    when chunks is also given, alongside it.
     """
     try:
         cap = Capture(query, pipeline)
         cap._record.response = response
         if chunks is not None:
-            cap.chunks(chunks)
+            cap.chunks(chunks, requested_chunk_count)
         if final_prompt is not None:
             cap._record.final_prompt = final_prompt
         if token_budget is not None:
@@ -347,14 +355,14 @@ def capture(
 # (never raise), matching the fail-open contract.
 
 
-def chunks(chunks: list) -> None:
+def chunks(chunks: list, requested_count: int | None = None) -> None:
     """Proxy for the active capture's .chunks(). Mutates the active
     capture; logs and no-ops if there is none."""
     cap = get_active_capture()
     if cap is None:
         _get_logger().error("chunks() called with no active capture")
         return
-    cap.chunks(chunks)
+    cap.chunks(chunks, requested_count)
 
 
 def context(final_prompt: str, token_budget: TokenBudget | dict | int | None = None) -> None:

@@ -27,6 +27,10 @@ def capture_demo_run() -> str:
         "what is RRF and how does it normalize scores?",
         "RRF replaces raw scores with rank-based reciprocal values.",
         pipeline=PIPELINE,
+        # requested_chunk_count=4 matches the 4 chunks below exactly --
+        # a clean score_underfill reading (underfill_ratio 0.0), contrast
+        # with 02_capture_patterns.py's under-filled demo run.
+        requested_chunk_count=4,
         chunks=[
             {
                 "chunk_id": "rrf_1",

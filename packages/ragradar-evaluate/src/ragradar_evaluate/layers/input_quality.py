@@ -368,6 +368,40 @@ def score_score_margin(record: RunRecord, policy: InputQualityPolicy) -> dict | 
     }
 
 
+def score_score_underfill(record: RunRecord) -> dict | None:
+    """Score-underfill family: did retrieval return fewer chunks than the
+    pipeline asked for? Pure.
+
+    Needs a captured requested_chunk_count (the retriever's top_k ask,
+    threaded through cap.chunks()/capture()) -- returns None (not a
+    zero-value result) when it wasn't captured, or when it is not a
+    positive number (no meaningful ratio to compute, mirroring
+    score_filter_risk's candidate_count <= 0 guard). Also returns None
+    for a chunk-less record.
+
+    underfill_ratio -- (requested - returned) / requested -- is THE
+    CHECKED FACTOR: negative when more chunks came back than were
+    requested (never a policy violation), positive when fewer did.
+    requested_chunk_count and returned_chunk_count ride alongside as
+    diagnostic-only context, the same primary-value-plus-counts shape as
+    score_filter_risk's filtered_exclusion_ratio plus
+    filter_candidate_count/filter_excluded_count.
+    """
+    if record.chunks is None:
+        return None
+    requested = record.requested_chunk_count
+    if requested is None or requested <= 0:
+        return None
+
+    returned = len(record.chunks)
+
+    return {
+        "underfill_ratio": (requested - returned) / requested,
+        "requested_chunk_count": requested,
+        "returned_chunk_count": returned,
+    }
+
+
 # Values rounded (to 4 places) for display/persistence only. Everything
 # else a family returns is an int, a string, None, or already rounded at
 # computation (score_variance).
@@ -381,6 +415,7 @@ _ROUND_KEYS = (
     "filtered_exclusion_ratio",
     "top_second_margin",
     "threshold_margin",
+    "underfill_ratio",
 )
 
 
@@ -460,6 +495,10 @@ def check_policy_violations(
     val = values.get("top_second_margin")
     if val is not None and val < policy.min_top_second_margin:
         violations.append("min_top_second_margin")
+
+    val = values.get("underfill_ratio")
+    if val is not None and val > policy.max_underfill_ratio:
+        violations.append("max_underfill_ratio")
 
     return violations
 

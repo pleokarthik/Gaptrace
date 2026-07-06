@@ -9,6 +9,7 @@ from ragradar_evaluate.layers.input_quality import (
     score_input_quality,
     score_score_degeneracy,
     score_score_margin,
+    score_score_underfill,
 )
 from ragradar_evaluate.policy.schema import InputQualityPolicy
 
@@ -662,6 +663,110 @@ class TestScoreMargin:
         result = score_input_quality(rec, InputQualityPolicy())
         assert "top_second_margin" not in result
         assert "threshold_margin" not in result
+
+
+class TestScoreUnderfill:
+    def _record(self, chunks, requested_chunk_count=None):
+        return RunRecord(
+            query="q", response="r", chunks=chunks, requested_chunk_count=requested_chunk_count
+        )
+
+    def test_normal_case(self):
+        rec = self._record(
+            [
+                ChunkRecord(chunk_id="c1", source_doc_id="d1", content="a", token_count=10),
+                ChunkRecord(chunk_id="c2", source_doc_id="d2", content="b", token_count=10),
+            ],
+            requested_chunk_count=5,
+        )
+        result = score_score_underfill(rec)
+        assert result["underfill_ratio"] == 0.6
+        assert result["requested_chunk_count"] == 5
+        assert result["returned_chunk_count"] == 2
+
+    def test_exact_match_ratio_is_zero(self):
+        rec = self._record(
+            [
+                ChunkRecord(chunk_id="c1", source_doc_id="d1", content="a", token_count=10),
+                ChunkRecord(chunk_id="c2", source_doc_id="d2", content="b", token_count=10),
+            ],
+            requested_chunk_count=2,
+        )
+        result = score_score_underfill(rec)
+        assert result["underfill_ratio"] == 0.0
+
+    def test_more_returned_than_requested_is_negative_never_a_violation(self):
+        rec = self._record(
+            [
+                ChunkRecord(chunk_id="c1", source_doc_id="d1", content="a", token_count=10),
+                ChunkRecord(chunk_id="c2", source_doc_id="d2", content="b", token_count=10),
+                ChunkRecord(chunk_id="c3", source_doc_id="d3", content="c", token_count=10),
+            ],
+            requested_chunk_count=2,
+        )
+        result = score_score_underfill(rec)
+        assert result["underfill_ratio"] == -0.5
+        violations = check_policy_violations(result, InputQualityPolicy(), rec)
+        assert "max_underfill_ratio" not in violations
+
+    def test_none_with_requested_chunk_count_absent(self):
+        rec = self._record(
+            [ChunkRecord(chunk_id="c1", source_doc_id="d1", content="a", token_count=10)],
+            requested_chunk_count=None,
+        )
+        assert score_score_underfill(rec) is None
+
+    def test_none_with_chunks_absent(self):
+        rec = self._record(None, requested_chunk_count=5)
+        assert score_score_underfill(rec) is None
+
+    def test_none_with_non_positive_requested_chunk_count(self):
+        rec = self._record(
+            [ChunkRecord(chunk_id="c1", source_doc_id="d1", content="a", token_count=10)],
+            requested_chunk_count=0,
+        )
+        assert score_score_underfill(rec) is None
+
+    def test_policy_violation_fires_on_high_underfill(self):
+        rec = self._record(
+            [ChunkRecord(chunk_id="c1", source_doc_id="d1", content="a", token_count=10)],
+            requested_chunk_count=5,
+        )
+        policy = InputQualityPolicy(max_underfill_ratio=0.2)
+        result = score_score_underfill(rec)
+        violations = check_policy_violations(result, policy, rec)
+        assert "max_underfill_ratio" in violations
+
+    def test_policy_passes_on_low_underfill(self):
+        rec = self._record(
+            [
+                ChunkRecord(chunk_id="c1", source_doc_id="d1", content="a", token_count=10),
+                ChunkRecord(chunk_id="c2", source_doc_id="d2", content="b", token_count=10),
+                ChunkRecord(chunk_id="c3", source_doc_id="d3", content="c", token_count=10),
+                ChunkRecord(chunk_id="c4", source_doc_id="d4", content="d", token_count=10),
+                ChunkRecord(chunk_id="c5", source_doc_id="d5", content="e", token_count=10),
+            ],
+            requested_chunk_count=5,
+        )
+        policy = InputQualityPolicy(max_underfill_ratio=0.2)
+        result = score_score_underfill(rec)
+        violations = check_policy_violations(result, policy, rec)
+        assert "max_underfill_ratio" not in violations
+
+    def test_not_included_in_score_input_quality(self):
+        # score_score_underfill needs requested_chunk_count, a field
+        # score_input_quality's other families never look at -- like
+        # score_cache_risk/score_filter_risk (optional-data-gated), it is
+        # dispatched only through evaluate(), never by score_input_quality().
+        rec = self._record(
+            [
+                ChunkRecord(chunk_id="c1", source_doc_id="d1", content="a", token_count=10),
+                ChunkRecord(chunk_id="c2", source_doc_id="d2", content="b", token_count=10),
+            ],
+            requested_chunk_count=5,
+        )
+        result = score_input_quality(rec, InputQualityPolicy())
+        assert "underfill_ratio" not in result
 
 
 class TestCosineSimilarity:

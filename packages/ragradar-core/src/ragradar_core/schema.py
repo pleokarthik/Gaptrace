@@ -182,6 +182,7 @@ class RunRecord:
     query: str
     response: str
     chunks: Optional[list[ChunkRecord]] = None
+    requested_chunk_count: Optional[int] = None
     final_prompt: Optional[str] = None
     token_budget: Optional[TokenBudget] = None
     history_pre: Optional[list[Turn]] = None

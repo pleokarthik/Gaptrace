@@ -28,6 +28,7 @@ ALL_METRICS = {
     "filter_risk",
     "score_degeneracy",
     "score_margin",
+    "score_underfill",
     "faithfulness",
     "answer_relevancy",
     "context_precision",
@@ -108,6 +109,8 @@ class TestCompleteEval:
                 continue  # full_record never checked a semantic cache -- not applicable.
             if name == "filter_risk":
                 continue  # full_record never applied a metadata filter -- not applicable.
+            if name == "score_underfill":
+                continue  # full_record never captured a requested_chunk_count -- not applicable.
             assert name in result.metrics, f"{name} missing from complete eval"
         for name in ("faithfulness", "answer_relevancy", "context_precision"):
             assert result.metrics[name] == fake_ragas.scores[name]
@@ -388,12 +391,16 @@ class TestCacheRiskIntegration:
 
     def test_other_input_metrics_unaffected_by_cache_gate(self, full_record):
         # A record with both chunks and no cache data still computes the
-        # 6 chunk-based metrics (cache_risk and filter_risk key off other fields).
+        # other chunk-based metrics (cache_risk and filter_risk key off
+        # other fields; score_underfill also needs a captured
+        # requested_chunk_count, which full_record doesn't have).
         result = evaluate(full_record, metrics=list(INPUT_METRICS), save=False)
         for name in INPUT_METRICS:
             if name == "cache_risk":
                 continue
             if name == "filter_risk":
+                continue
+            if name == "score_underfill":
                 continue
             assert name in result.metrics
 
@@ -533,6 +540,77 @@ class TestScoreMarginCheckFactor:
         result = check(rec, policy=InputQualityPolicy(min_top_second_margin=0.05))
 
         assert result.factors["top_second_margin"]["status"] == "ok"
+
+
+class TestScoreUnderfillIntegration:
+    """score_underfill needs record.requested_chunk_count, a field no other
+    input metric looks at -- mirrors TestFilterRiskIntegration's proof that
+    evaluate() reports it as legitimately not-applicable rather than
+    missing data when the record lacks it."""
+
+    def test_computes_normal_case(self):
+        rec = RunRecord(
+            query="q",
+            response="r",
+            chunks=[{"content": "a"}, {"content": "b"}],
+            requested_chunk_count=5,
+        )
+        result = evaluate(rec, metrics=["score_underfill"], save=False)
+
+        assert "score_underfill" not in result.skipped
+        assert result.metrics["score_underfill"]["underfill_ratio"] == 0.6
+        assert result.metrics["score_underfill"]["requested_chunk_count"] == 5
+        assert result.metrics["score_underfill"]["returned_chunk_count"] == 2
+
+    def test_exact_match_case(self):
+        rec = RunRecord(
+            query="q",
+            response="r",
+            chunks=[{"content": "a"}, {"content": "b"}],
+            requested_chunk_count=2,
+        )
+        result = evaluate(rec, metrics=["score_underfill"], save=False)
+        assert result.metrics["score_underfill"]["underfill_ratio"] == 0.0
+
+    def test_skipped_as_not_applicable_when_requested_count_never_captured(self, full_record):
+        result = evaluate(full_record, metrics=["score_underfill"], save=False)
+        assert result.skipped["score_underfill"] == "not applicable"
+        assert "score_underfill" not in result.metrics
+
+    def test_skipped_for_missing_chunks_when_no_chunks(self):
+        rec = RunRecord(query="q", response="r", requested_chunk_count=5)
+        result = evaluate(rec, metrics=["score_underfill"], save=False)
+        assert result.skipped["score_underfill"] == "missing data: record has no chunks"
+        assert "score_underfill" not in result.metrics
+
+
+class TestScoreUnderfillCheckFactor:
+    """underfill_ratio is the 10th _CHECK_FACTORS entry -- like score_margin
+    it is advisory-only, not folded into the weighted risk_score (locked
+    design decision: zero changes to risk.py/_DEFAULT_WEIGHTS)."""
+
+    def test_check_flags_high_underfill(self):
+        rec = RunRecord(
+            query="q",
+            response="r",
+            chunks=[{"content": "a"}],
+            requested_chunk_count=5,
+        )
+        result = check(rec, policy=InputQualityPolicy(max_underfill_ratio=0.2))
+
+        assert result.factors["underfill_ratio"]["status"] == "fail"
+        assert any("requested chunk count" in p for p in result.problems)
+
+    def test_check_ok_on_exact_match(self):
+        rec = RunRecord(
+            query="q",
+            response="r",
+            chunks=[{"content": "a"}, {"content": "b"}],
+            requested_chunk_count=2,
+        )
+        result = check(rec, policy=InputQualityPolicy(max_underfill_ratio=0.2))
+
+        assert result.factors["underfill_ratio"]["status"] == "ok"
 
 
 class TestScoreDegeneracyCheckFactor:

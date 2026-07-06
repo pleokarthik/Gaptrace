@@ -10,6 +10,7 @@ from ragradar.explain.analyzers import (
     semantic_cache,
     tokens,
     truncation,
+    underfill,
 )
 from ragradar_core.schema import CacheRecord, ChunkRecord, RunRecord, TokenBudget, Turn
 from ragradar_evaluate.policy.schema import InputQualityPolicy
@@ -47,6 +48,9 @@ class TestEmptyRecord:
 
     def test_margin(self):
         assert margin.analyze(self.empty) is None
+
+    def test_underfill(self):
+        assert underfill.analyze(self.empty) is None
 
 
 class TestTokens:
@@ -445,6 +449,73 @@ class TestMargin:
         assert result["threshold_margin"] == round(
             0.9 - InputQualityPolicy.default().min_top_chunk_score, 4
         )
+
+
+class TestUnderfill:
+    def test_structure(self):
+        record = RunRecord(
+            query="q",
+            response="r",
+            chunks=[
+                ChunkRecord(chunk_id="c1", source_doc_id="d1", content="a", token_count=10),
+                ChunkRecord(chunk_id="c2", source_doc_id="d2", content="b", token_count=10),
+            ],
+            requested_chunk_count=5,
+        )
+        result = underfill.analyze(record)
+        assert result is not None
+        assert "underfill_ratio" in result
+        assert "requested_chunk_count" in result
+        assert "returned_chunk_count" in result
+
+    def test_values(self):
+        record = RunRecord(
+            query="q",
+            response="r",
+            chunks=[
+                ChunkRecord(chunk_id="c1", source_doc_id="d1", content="a", token_count=10),
+                ChunkRecord(chunk_id="c2", source_doc_id="d2", content="b", token_count=10),
+            ],
+            requested_chunk_count=5,
+        )
+        result = underfill.analyze(record)
+        assert result["underfill_ratio"] == 0.6
+        assert result["requested_chunk_count"] == 5
+        assert result["returned_chunk_count"] == 2
+
+    def test_exact_match_ratio_is_zero(self):
+        record = RunRecord(
+            query="q",
+            response="r",
+            chunks=[
+                ChunkRecord(chunk_id="c1", source_doc_id="d1", content="a", token_count=10),
+                ChunkRecord(chunk_id="c2", source_doc_id="d2", content="b", token_count=10),
+            ],
+            requested_chunk_count=2,
+        )
+        result = underfill.analyze(record)
+        assert result["underfill_ratio"] == 0.0
+
+    def test_none_with_requested_chunk_count_absent(self):
+        record = RunRecord(
+            query="q",
+            response="r",
+            chunks=[ChunkRecord(chunk_id="c1", source_doc_id="d1", content="a", token_count=10)],
+        )
+        assert underfill.analyze(record) is None
+
+    def test_none_with_chunks_absent(self):
+        record = RunRecord(query="q", response="r", requested_chunk_count=5)
+        assert underfill.analyze(record) is None
+
+    def test_none_with_non_positive_requested_chunk_count(self):
+        record = RunRecord(
+            query="q",
+            response="r",
+            chunks=[ChunkRecord(chunk_id="c1", source_doc_id="d1", content="a", token_count=10)],
+            requested_chunk_count=0,
+        )
+        assert underfill.analyze(record) is None
 
 
 class TestSemanticCache:

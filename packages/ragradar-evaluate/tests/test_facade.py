@@ -26,6 +26,8 @@ ALL_METRICS = {
     "coherence",
     "cache_risk",
     "filter_risk",
+    "score_degeneracy",
+    "score_margin",
     "faithfulness",
     "answer_relevancy",
     "context_precision",
@@ -386,7 +388,7 @@ class TestCacheRiskIntegration:
 
     def test_other_input_metrics_unaffected_by_cache_gate(self, full_record):
         # A record with both chunks and no cache data still computes the
-        # 5 chunk-based metrics exactly as before cache_risk existed.
+        # 6 chunk-based metrics (cache_risk and filter_risk key off other fields).
         result = evaluate(full_record, metrics=list(INPUT_METRICS), save=False)
         for name in INPUT_METRICS:
             if name == "cache_risk":
@@ -450,3 +452,133 @@ class TestFilterRiskCheckFactor:
         result = check(rec, policy=InputQualityPolicy(max_filtered_exclusion_ratio=0.3))
 
         assert result.factors["filtered_exclusion_ratio"]["status"] == "ok"
+
+
+class TestScoreMarginIntegration:
+    """score_margin needs the active policy mid-computation (threshold_margin
+    needs min_top_chunk_score) -- mirrors TestCacheRiskIntegration's proof
+    that evaluate()'s per-metric gate actually threads policy through."""
+
+    def test_computes_both_raw_values(self, full_record):
+        result = evaluate(full_record, metrics=["score_margin"], save=False)
+
+        assert "score_margin" not in result.skipped
+        assert result.metrics["score_margin"]["top_second_margin"] == 0.45
+        assert result.metrics["score_margin"]["threshold_margin"] == round(0.85 - 0.7, 4)
+
+    def test_skipped_with_fewer_than_two_usable_scores(self):
+        rec = RunRecord(
+            query="q",
+            response="r",
+            chunks=[
+                {"content": "only one chunk", "rerank_score": 0.9},
+            ],
+        )
+        result = evaluate(rec, metrics=["score_margin"], save=False)
+        assert result.skipped["score_margin"] == "not applicable"
+        assert "score_margin" not in result.metrics
+
+    def test_custom_policy_threshold_used_for_threshold_margin(self, full_record):
+        custom_policy = InputQualityPolicy(min_top_chunk_score=0.5)
+        result = evaluate(
+            full_record, metrics=["score_margin"], policy=custom_policy, save=False
+        )
+        assert result.metrics["score_margin"]["threshold_margin"] == round(0.85 - 0.5, 4)
+
+
+class TestScoreMarginCheckFactor:
+    """top_second_margin is the 9th _CHECK_FACTORS entry -- like score_degeneracy
+    it is advisory-only, not folded into the weighted risk_score (locked
+    design decision: zero changes to risk.py/_DEFAULT_WEIGHTS)."""
+
+    def test_check_flags_thin_margin(self):
+        from ragradar_core.schema import ChunkRecord
+
+        rec = RunRecord(
+            query="q",
+            response="r",
+            chunks=[
+                ChunkRecord(
+                    chunk_id="c1", source_doc_id="d1", content="a", token_count=10,
+                    rerank_score=0.9,
+                ),
+                ChunkRecord(
+                    chunk_id="c2", source_doc_id="d2", content="b", token_count=10,
+                    rerank_score=0.89,
+                ),
+            ],
+        )
+        result = check(rec, policy=InputQualityPolicy(min_top_second_margin=0.05))
+
+        assert result.factors["top_second_margin"]["status"] == "fail"
+        assert any("margin" in p for p in result.problems)
+
+    def test_check_ok_on_healthy_margin(self):
+        from ragradar_core.schema import ChunkRecord
+
+        rec = RunRecord(
+            query="q",
+            response="r",
+            chunks=[
+                ChunkRecord(
+                    chunk_id="c1", source_doc_id="d1", content="a", token_count=10,
+                    rerank_score=0.9,
+                ),
+                ChunkRecord(
+                    chunk_id="c2", source_doc_id="d2", content="b", token_count=10,
+                    rerank_score=0.4,
+                ),
+            ],
+        )
+        result = check(rec, policy=InputQualityPolicy(min_top_second_margin=0.05))
+
+        assert result.factors["top_second_margin"]["status"] == "ok"
+
+
+class TestScoreDegeneracyCheckFactor:
+    """chunk_score_variance is the 8th _CHECK_FACTORS entry -- like
+    filter_risk it is not folded into the weighted risk_score (locked
+    design decision: zero changes to risk.py/_DEFAULT_WEIGHTS)."""
+
+    def test_check_flags_low_variance(self):
+        from ragradar_core.schema import ChunkRecord
+
+        rec = RunRecord(
+            query="q",
+            response="r",
+            chunks=[
+                ChunkRecord(
+                    chunk_id="c1", source_doc_id="d1", content="a", token_count=10,
+                    rerank_score=0.70,
+                ),
+                ChunkRecord(
+                    chunk_id="c2", source_doc_id="d2", content="b", token_count=10,
+                    rerank_score=0.71,
+                ),
+            ],
+        )
+        result = check(rec, policy=InputQualityPolicy(min_score_variance=0.01))
+
+        assert result.factors["chunk_score_variance"]["status"] == "fail"
+        assert any("variance" in p for p in result.problems)
+
+    def test_check_ok_on_healthy_variance(self):
+        from ragradar_core.schema import ChunkRecord
+
+        rec = RunRecord(
+            query="q",
+            response="r",
+            chunks=[
+                ChunkRecord(
+                    chunk_id="c1", source_doc_id="d1", content="a", token_count=10,
+                    rerank_score=0.9,
+                ),
+                ChunkRecord(
+                    chunk_id="c2", source_doc_id="d2", content="b", token_count=10,
+                    rerank_score=0.4,
+                ),
+            ],
+        )
+        result = check(rec, policy=InputQualityPolicy(min_score_variance=0.01))
+
+        assert result.factors["chunk_score_variance"]["status"] == "ok"

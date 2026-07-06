@@ -25,6 +25,8 @@ class InputQualityPolicy:
     cache_borderline_margin: float = 0.03
     cache_max_age_seconds: int = 86400
     max_filtered_exclusion_ratio: float = 0.3
+    min_score_variance: float = 0.0001
+    min_top_second_margin: float = 0.05
 
     def to_dict(self) -> dict:
         """This policy as a plain, JSON-serializable dict. Pure."""

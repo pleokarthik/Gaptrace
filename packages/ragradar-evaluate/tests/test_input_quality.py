@@ -7,6 +7,8 @@ from ragradar_evaluate.layers.input_quality import (
     score_cache_risk,
     score_filter_risk,
     score_input_quality,
+    score_score_degeneracy,
+    score_score_margin,
 )
 from ragradar_evaluate.policy.schema import InputQualityPolicy
 
@@ -384,6 +386,282 @@ class TestFilterRisk:
         values = score_filter_risk(rec)
         violations = check_policy_violations(values, policy, rec)
         assert "max_filtered_exclusion_ratio" not in violations
+
+
+class TestScoreDegeneracy:
+    def _record(self, chunks) -> RunRecord:
+        return RunRecord(query="q", response="r", chunks=chunks)
+
+    def test_variance_uses_rerank_score(self):
+        rec = self._record(
+            [
+                ChunkRecord(
+                    chunk_id="c1", source_doc_id="d1", content="a", token_count=10, rerank_score=0.9
+                ),
+                ChunkRecord(
+                    chunk_id="c2", source_doc_id="d2", content="b", token_count=10, rerank_score=0.4
+                ),
+            ]
+        )
+        result = score_score_degeneracy(rec)
+        assert result["chunk_score_variance"] == 0.0625
+
+    def test_falls_back_to_retrieval_score(self):
+        rec = self._record(
+            [
+                ChunkRecord(
+                    chunk_id="c1", source_doc_id="d1", content="a", token_count=10,
+                    retrieval_score=0.9,
+                ),
+                ChunkRecord(
+                    chunk_id="c2", source_doc_id="d2", content="b", token_count=10,
+                    retrieval_score=0.4,
+                ),
+            ]
+        )
+        result = score_score_degeneracy(rec)
+        assert result["chunk_score_variance"] == 0.0625
+
+    def test_excludes_chunks_with_no_usable_score(self):
+        rec = self._record(
+            [
+                ChunkRecord(
+                    chunk_id="c1", source_doc_id="d1", content="a", token_count=10, rerank_score=0.9
+                ),
+                ChunkRecord(
+                    chunk_id="c2", source_doc_id="d2", content="b", token_count=10, rerank_score=0.4
+                ),
+                ChunkRecord(chunk_id="c3", source_doc_id="d3", content="c", token_count=10),
+            ]
+        )
+        result = score_score_degeneracy(rec)
+        assert result["chunk_score_variance"] == 0.0625
+
+    def test_none_with_fewer_than_two_usable_scores(self):
+        rec = self._record(
+            [
+                ChunkRecord(
+                    chunk_id="c1", source_doc_id="d1", content="a", token_count=10, rerank_score=0.9
+                ),
+                ChunkRecord(chunk_id="c2", source_doc_id="d2", content="b", token_count=10),
+            ]
+        )
+        result = score_score_degeneracy(rec)
+        assert result["chunk_score_variance"] is None
+
+    def test_none_with_zero_usable_scores(self):
+        rec = self._record(
+            [ChunkRecord(chunk_id="c1", source_doc_id="d1", content="a", token_count=10)]
+        )
+        result = score_score_degeneracy(rec)
+        assert result["chunk_score_variance"] is None
+
+    def test_does_not_collide_with_coherence_score_variance(self):
+        # score_coherence's "score_variance" (rerank-only, needs >1 rerank
+        # score) and this factor's "chunk_score_variance" (rerank falling
+        # back to retrieval_score) are merged into the same flat dict by
+        # score_input_quality() -- they must coexist under distinct keys
+        # rather than one clobbering the other.
+        rec = self._record(
+            [
+                ChunkRecord(
+                    chunk_id="c1", source_doc_id="d1", content="a", token_count=10, rerank_score=0.9
+                ),
+                ChunkRecord(
+                    chunk_id="c2", source_doc_id="d2", content="b", token_count=10,
+                    retrieval_score=0.2,
+                ),
+            ]
+        )
+        result = score_input_quality(rec, InputQualityPolicy())
+        # coherence sees only one rerank score -> undefined (needs >1)
+        assert result["score_variance"] is None
+        # degeneracy falls back to retrieval_score for c2 -> two usable scores
+        assert result["chunk_score_variance"] == 0.1225
+
+    def test_policy_violation_fires_on_low_variance(self):
+        rec = self._record(
+            [
+                ChunkRecord(
+                    chunk_id="c1", source_doc_id="d1", content="a", token_count=10, rerank_score=0.70
+                ),
+                ChunkRecord(
+                    chunk_id="c2", source_doc_id="d2", content="b", token_count=10, rerank_score=0.71
+                ),
+            ]
+        )
+        policy = InputQualityPolicy(min_score_variance=0.01)
+        values = score_score_degeneracy(rec)
+        violations = check_policy_violations(values, policy, rec)
+        assert "min_score_variance" in violations
+
+    def test_policy_passes_on_healthy_variance(self):
+        rec = self._record(
+            [
+                ChunkRecord(
+                    chunk_id="c1", source_doc_id="d1", content="a", token_count=10, rerank_score=0.9
+                ),
+                ChunkRecord(
+                    chunk_id="c2", source_doc_id="d2", content="b", token_count=10, rerank_score=0.4
+                ),
+            ]
+        )
+        policy = InputQualityPolicy(min_score_variance=0.01)
+        values = score_score_degeneracy(rec)
+        violations = check_policy_violations(values, policy, rec)
+        assert "min_score_variance" not in violations
+
+    def test_none_value_never_violates(self):
+        rec = self._record(
+            [ChunkRecord(chunk_id="c1", source_doc_id="d1", content="a", token_count=10)]
+        )
+        values = score_score_degeneracy(rec)
+        violations = check_policy_violations(values, InputQualityPolicy(), rec)
+        assert "min_score_variance" not in violations
+
+
+class TestScoreMargin:
+    def _record(self, chunks) -> RunRecord:
+        return RunRecord(query="q", response="r", chunks=chunks)
+
+    def test_normal_case(self):
+        rec = self._record(
+            [
+                ChunkRecord(
+                    chunk_id="c1", source_doc_id="d1", content="a", token_count=10, rerank_score=0.9
+                ),
+                ChunkRecord(
+                    chunk_id="c2", source_doc_id="d2", content="b", token_count=10, rerank_score=0.4
+                ),
+            ]
+        )
+        result = score_score_margin(rec, InputQualityPolicy())
+        assert result["top_second_margin"] == 0.5
+        assert result["threshold_margin"] == 0.9 - InputQualityPolicy().min_top_chunk_score
+
+    def test_falls_back_to_retrieval_score(self):
+        rec = self._record(
+            [
+                ChunkRecord(
+                    chunk_id="c1", source_doc_id="d1", content="a", token_count=10,
+                    retrieval_score=0.9,
+                ),
+                ChunkRecord(
+                    chunk_id="c2", source_doc_id="d2", content="b", token_count=10,
+                    retrieval_score=0.4,
+                ),
+            ]
+        )
+        result = score_score_margin(rec, InputQualityPolicy())
+        assert result["top_second_margin"] == 0.5
+
+    def test_sorts_scores_regardless_of_chunk_order(self):
+        rec = self._record(
+            [
+                ChunkRecord(
+                    chunk_id="c1", source_doc_id="d1", content="a", token_count=10, rerank_score=0.4
+                ),
+                ChunkRecord(
+                    chunk_id="c2", source_doc_id="d2", content="b", token_count=10, rerank_score=0.9
+                ),
+                ChunkRecord(
+                    chunk_id="c3", source_doc_id="d3", content="c", token_count=10, rerank_score=0.6
+                ),
+            ]
+        )
+        result = score_score_margin(rec, InputQualityPolicy())
+        assert round(result["top_second_margin"], 4) == 0.3
+
+    def test_none_with_fewer_than_two_usable_scores(self):
+        rec = self._record(
+            [
+                ChunkRecord(
+                    chunk_id="c1", source_doc_id="d1", content="a", token_count=10, rerank_score=0.9
+                ),
+                ChunkRecord(chunk_id="c2", source_doc_id="d2", content="b", token_count=10),
+            ]
+        )
+        assert score_score_margin(rec, InputQualityPolicy()) is None
+
+    def test_none_with_zero_usable_scores(self):
+        rec = self._record(
+            [ChunkRecord(chunk_id="c1", source_doc_id="d1", content="a", token_count=10)]
+        )
+        assert score_score_margin(rec, InputQualityPolicy()) is None
+
+    def test_threshold_margin_present_but_not_policy_checked(self):
+        # threshold_margin rides on the same min_top_chunk_score boundary the
+        # top_chunk_score factor already owns -- diagnostic-only, no
+        # _CHECK_FACTORS entry or policy field of its own. A record whose
+        # top score is well below min_top_chunk_score (so threshold_margin is
+        # sharply negative) must not produce any violation naming it --
+        # only top_second_margin can fire from this function's output.
+        rec = self._record(
+            [
+                ChunkRecord(
+                    chunk_id="c1", source_doc_id="d1", content="a", token_count=10, rerank_score=0.3
+                ),
+                ChunkRecord(
+                    chunk_id="c2", source_doc_id="d2", content="b", token_count=10, rerank_score=0.25
+                ),
+            ]
+        )
+        policy = InputQualityPolicy(min_top_chunk_score=0.7, min_top_second_margin=0.01)
+        values = score_score_margin(rec, policy)
+        assert values["threshold_margin"] == 0.3 - 0.7  # present in the dict...
+        violations = check_policy_violations(values, policy, rec)
+        assert violations == []  # ...but produces no violation on its own
+        assert not any("threshold_margin" in v for v in violations)
+
+    def test_policy_violation_fires_on_thin_margin(self):
+        rec = self._record(
+            [
+                ChunkRecord(
+                    chunk_id="c1", source_doc_id="d1", content="a", token_count=10, rerank_score=0.9
+                ),
+                ChunkRecord(
+                    chunk_id="c2", source_doc_id="d2", content="b", token_count=10, rerank_score=0.89
+                ),
+            ]
+        )
+        policy = InputQualityPolicy(min_top_second_margin=0.05)
+        values = score_score_margin(rec, policy)
+        violations = check_policy_violations(values, policy, rec)
+        assert "min_top_second_margin" in violations
+
+    def test_policy_passes_on_healthy_margin(self):
+        rec = self._record(
+            [
+                ChunkRecord(
+                    chunk_id="c1", source_doc_id="d1", content="a", token_count=10, rerank_score=0.9
+                ),
+                ChunkRecord(
+                    chunk_id="c2", source_doc_id="d2", content="b", token_count=10, rerank_score=0.4
+                ),
+            ]
+        )
+        policy = InputQualityPolicy(min_top_second_margin=0.05)
+        values = score_score_margin(rec, policy)
+        violations = check_policy_violations(values, policy, rec)
+        assert "min_top_second_margin" not in violations
+
+    def test_not_included_in_score_input_quality(self):
+        # score_score_margin needs policy mid-computation, so -- like
+        # score_cache_risk/score_filter_risk -- it is dispatched only
+        # through evaluate(), never by the policy-free score_input_quality().
+        rec = self._record(
+            [
+                ChunkRecord(
+                    chunk_id="c1", source_doc_id="d1", content="a", token_count=10, rerank_score=0.9
+                ),
+                ChunkRecord(
+                    chunk_id="c2", source_doc_id="d2", content="b", token_count=10, rerank_score=0.4
+                ),
+            ]
+        )
+        result = score_input_quality(rec, InputQualityPolicy())
+        assert "top_second_margin" not in result
+        assert "threshold_margin" not in result
 
 
 class TestCosineSimilarity:

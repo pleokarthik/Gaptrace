@@ -2,8 +2,10 @@ from datetime import datetime, timedelta, timezone
 
 from ragradar.explain.analyzers import (
     cache,
+    degeneracy,
     duplicates,
     history,
+    margin,
     scores,
     semantic_cache,
     tokens,
@@ -39,6 +41,12 @@ class TestEmptyRecord:
 
     def test_scores(self):
         assert scores.analyze(self.empty) is None
+
+    def test_degeneracy(self):
+        assert degeneracy.analyze(self.empty) is None
+
+    def test_margin(self):
+        assert margin.analyze(self.empty) is None
 
 
 class TestTokens:
@@ -325,6 +333,118 @@ class TestScores:
         )
         result = scores.analyze(record)
         assert result is None
+
+
+class TestDegeneracy:
+    def test_structure(self, full_record):
+        result = degeneracy.analyze(full_record)
+        assert result is not None
+        assert "usable_score_count" in result
+        assert "chunk_score_variance" in result
+
+    def test_variance_value(self, full_record):
+        # full_record's chunks carry rerank_score 0.85 and 0.4.
+        result = degeneracy.analyze(full_record)
+        assert result["usable_score_count"] == 2
+        assert result["chunk_score_variance"] == 0.0506
+
+    def test_falls_back_to_retrieval_score(self):
+        record = RunRecord(
+            query="q",
+            response="r",
+            chunks=[
+                ChunkRecord(
+                    chunk_id="c1", source_doc_id="d1", content="a", token_count=10,
+                    retrieval_score=0.9,
+                ),
+                ChunkRecord(
+                    chunk_id="c2", source_doc_id="d2", content="b", token_count=10,
+                    retrieval_score=0.4,
+                ),
+            ],
+        )
+        result = degeneracy.analyze(record)
+        assert result["chunk_score_variance"] == 0.0625
+
+    def test_none_with_fewer_than_two_usable_scores(self):
+        record = RunRecord(
+            query="q",
+            response="r",
+            chunks=[
+                ChunkRecord(
+                    chunk_id="c1", source_doc_id="d1", content="a", token_count=10, rerank_score=0.9
+                ),
+                ChunkRecord(chunk_id="c2", source_doc_id="d2", content="b", token_count=10),
+            ],
+        )
+        result = degeneracy.analyze(record)
+        assert result["usable_score_count"] == 1
+        assert result["chunk_score_variance"] is None
+
+
+class TestMargin:
+    def test_structure(self, full_record):
+        result = margin.analyze(full_record)
+        assert result is not None
+        assert "top_second_margin" in result
+        assert "threshold_margin" in result
+
+    def test_values(self, full_record):
+        # full_record's chunks carry rerank_score 0.85 and 0.4.
+        result = margin.analyze(full_record, InputQualityPolicy())
+        assert result["top_second_margin"] == 0.45
+        assert result["threshold_margin"] == round(0.85 - InputQualityPolicy().min_top_chunk_score, 4)
+
+    def test_falls_back_to_retrieval_score(self):
+        record = RunRecord(
+            query="q",
+            response="r",
+            chunks=[
+                ChunkRecord(
+                    chunk_id="c1", source_doc_id="d1", content="a", token_count=10,
+                    retrieval_score=0.9,
+                ),
+                ChunkRecord(
+                    chunk_id="c2", source_doc_id="d2", content="b", token_count=10,
+                    retrieval_score=0.4,
+                ),
+            ],
+        )
+        result = margin.analyze(record)
+        assert result["top_second_margin"] == 0.5
+
+    def test_none_with_fewer_than_two_usable_scores(self):
+        record = RunRecord(
+            query="q",
+            response="r",
+            chunks=[
+                ChunkRecord(
+                    chunk_id="c1", source_doc_id="d1", content="a", token_count=10, rerank_score=0.9
+                ),
+                ChunkRecord(chunk_id="c2", source_doc_id="d2", content="b", token_count=10),
+            ],
+        )
+        result = margin.analyze(record)
+        assert result is None
+
+    def test_default_policy_used_when_none_given(self):
+        record = RunRecord(
+            query="q",
+            response="r",
+            chunks=[
+                ChunkRecord(
+                    chunk_id="c1", source_doc_id="d1", content="a", token_count=10, rerank_score=0.9
+                ),
+                ChunkRecord(
+                    chunk_id="c2", source_doc_id="d2", content="b", token_count=10, rerank_score=0.4
+                ),
+            ],
+        )
+        result = margin.analyze(record)
+        assert result is not None
+        assert result["threshold_margin"] == round(
+            0.9 - InputQualityPolicy.default().min_top_chunk_score, 4
+        )
 
 
 class TestSemanticCache:

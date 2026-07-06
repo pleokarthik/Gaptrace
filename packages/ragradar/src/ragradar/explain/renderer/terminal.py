@@ -8,10 +8,16 @@ from ragradar.explain.analyzers import (
     cache as cache_mod,
 )
 from ragradar.explain.analyzers import (
+    degeneracy as degeneracy_mod,
+)
+from ragradar.explain.analyzers import (
     duplicates as duplicates_mod,
 )
 from ragradar.explain.analyzers import (
     history as history_mod,
+)
+from ragradar.explain.analyzers import (
+    margin as margin_mod,
 )
 from ragradar.explain.analyzers import (
     metadata_filter as metadata_filter_mod,
@@ -214,6 +220,31 @@ def _render_metadata_filter(result: dict, full: bool) -> Panel:
     return Panel("\n".join(lines), title="Metadata Filter", border_style=style)
 
 
+def _render_degeneracy(result: dict, full: bool) -> Panel:
+    variance = result["chunk_score_variance"]
+    style = "white" if variance is None else "red" if variance < 0.0001 else "green"
+
+    lines = [f"Usable scores: {result['usable_score_count']}"]
+    if variance is not None:
+        lines.append(f"Variance: {variance:.4f}")
+    else:
+        lines.append("Variance: n/a (fewer than 2 chunks have a usable score)")
+
+    return Panel("\n".join(lines), title="Score Degeneracy", border_style=style)
+
+
+def _render_margin(result: dict, full: bool) -> Panel:
+    margin = result["top_second_margin"]
+    style = "green" if margin > 0.1 else "yellow" if margin > 0.02 else "red"
+
+    lines = [
+        f"Top-second margin:    {margin:+.4f}",
+        f"Top-threshold margin: {result['threshold_margin']:+.4f}",
+    ]
+
+    return Panel("\n".join(lines), title="Score Margin", border_style=style)
+
+
 _ANALYZERS = [
     (tokens_mod, _render_tokens),
     (scores_mod, _render_scores),
@@ -221,6 +252,7 @@ _ANALYZERS = [
     (truncation_mod, _render_truncation),
     (history_mod, _render_history),
     (cache_mod, _render_cache),
+    (degeneracy_mod, _render_degeneracy),
 ]
 
 
@@ -296,6 +328,13 @@ def render(record: RunRecord, full: bool = False, run_row: dict | None = None) -
         filter_result = metadata_filter_mod.analyze(record)
         if filter_result is not None:
             console.print(_render_metadata_filter(filter_result, full))
+
+    if record.chunks:
+        pipeline_key = (run_row or {}).get("pipeline") or "__default"
+        policy = load_policy(pipeline_key)
+        margin_result = margin_mod.analyze(record, policy)
+        if margin_result is not None:
+            console.print(_render_margin(margin_result, full))
 
     if run_row is not None:
         eval_panel = _render_eval_scores(run_row)

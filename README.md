@@ -65,7 +65,7 @@ python examples/rag_pipeline/03_evaluate.py
 ragradar list
 ragradar list s4
 
-# inspect the latest run — all seven factors
+# inspect the latest run
 ragradar explain --full
 
 # inspect a specific run
@@ -97,7 +97,7 @@ ragradar-evaluate policy show
 
 ## What ragradar explain shows
 
-Nine analysis factors, computed deterministically from captured data.
+Ten analysis factors, computed deterministically from captured data.
 Each factor is skipped silently if the required data was not captured.
 
 ```
@@ -105,6 +105,7 @@ Token usage       — per-section breakdown, headroom, model limit
 Duplicate chunks  — path dups, window dups, semantic dups
 Chunk scores      — retrieval + rerank score distribution
 Truncation        — which chunks were trimmed, at what score
+Score degeneracy  — chunk-score variance; near-zero means scores aren't discriminating
 Dropped history   — what was evicted, why, what survived
 Cache hits        — hit/miss ratio per chunk
 Cache behavior    — semantic-cache hit/miss, borderline similarity, stale-hit age
@@ -112,10 +113,13 @@ Metadata filter   — candidates excluded before scoring, exclusion ratio
 Final prompt      — assembled prompt as-is
 ```
 
-The example pipeline is designed to trigger all eight factors visibly:
-low headroom (4.8%), window duplicates, one high-score truncation
-(rerank 0.88, truncated=True), two evicted history turns, one cache hit,
-two candidates excluded by a metadata filter (33% exclusion).
+The example pipeline's `pattern_full_fields()` run (`examples/rag_pipeline/02_capture_patterns.py`,
+`ragradar explain s4r3 --full`) is designed to trigger nine of these ten
+factors visibly: low headroom (4.8%), window duplicates, one high-score
+truncation (rerank 0.88, truncated=True), two evicted history turns, one
+cache hit, two candidates excluded by a metadata filter (33% exclusion),
+plus chunk-score variance and chunk scores rendering alongside them
+(only "Cache behavior" is absent — this run never checks a semantic cache).
 
 ---
 

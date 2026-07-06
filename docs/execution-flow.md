@@ -17,7 +17,7 @@ ragradar          (import ragradar)          → reads runs.db, renders analysis
                                                  ragradar_capture's and ragradar_evaluate's public
                                                  functions, so `import ragradar` alone is the
                                                  complete public surface (packages/ragradar/src/
-                                                 ragradar/__init__.py:1-75)
+                                                 ragradar/__init__.py:1-82)
 ragradar-evaluate (import ragradar_evaluate) → reads + augments runs.db with eval columns
 ```
 
@@ -36,7 +36,7 @@ reachable through one import. All four packages ultimately depend on
 ## 1. Data model (recap)
 
 Everything funnels into one dataclass, `RunRecord`
-(`packages/ragradar-core/src/ragradar_core/schema.py:132`):
+(`packages/ragradar-core/src/ragradar_core/schema.py:171`):
 
 ```
 RunRecord
@@ -52,12 +52,19 @@ RunRecord
 ├── cache_events: [CacheEvent]   chunk_id, hit, cache_source
 ├── tool_calls: [ToolCallRecord]  tool_name, arguments, result, error, latency_ms
 ├── model: str
-└── token_usage: TokenUsage      input_tokens, output_tokens, total_tokens
+├── token_usage: TokenUsage      input_tokens, output_tokens, total_tokens
+├── cache: CacheRecord           checked, hit, similarity_score, threshold,
+│                                cached_query, cached_at, registered
+└── filter: FilterRecord         applied, candidate_count, excluded_count, filters
 ```
 
-`ToolCallRecord` (`schema.py:116`) is the newest field; nothing in
-`ragradar.explain` renders it yet (none of the six terminal/HTML analyzers
-reference `record.tool_calls`) — it is captured and persisted (round-trips
+`cache` and `filter` (`schema.py:132` and `schema.py:153`) are the newest
+fields — added for the semantic-cache and metadata-filter features, after
+`ToolCallRecord` (`schema.py:116`). Every one of the nine `ragradar.explain`
+analyzers has now been checked: `cache` is rendered by
+`explain/analyzers/semantic_cache.py` and `filter` by
+`explain/analyzers/metadata_filter.py`, but `tool_calls` still isn't
+referenced by any of the nine — it is captured and persisted (round-trips
 through `to_json()`/`from_json()`) but not currently surfaced by `explain`.
 
 All dataclasses are decorated with `_flexible` (`schema.py:15`), which wraps
@@ -66,8 +73,8 @@ never crashes a caller's pipeline for passing extra fields — every field
 except `query`/`response` is optional, and unknown ones are ignored rather
 than raising `TypeError`.
 
-`RunRecord.to_json()` (`schema.py:156`) is `dataclasses.asdict()`.
-`RunRecord.from_json()` (`schema.py:160`) manually reconstructs each nested
+`RunRecord.to_json()` (`schema.py:197`) is `dataclasses.asdict()`.
+`RunRecord.from_json()` (`schema.py:202`) manually reconstructs each nested
 dataclass list (including `tool_calls` → `ToolCallRecord`) because
 `asdict`/plain `dict` round-tripping loses the class information.
 
@@ -76,13 +83,14 @@ dataclass list (including `tool_calls` → `ToolCallRecord`) because
 dicts, `("role", "content")` tuples, a bare-int token budget, a
 `{chunk_id: hit}` cache mapping, all coerce into the dataclasses above.
 Token counts default to a deterministic ~4-chars-per-token estimate
-(`coerce.py:35`, `estimate_tokens`) when not given explicitly. Every
-coercer (`coerce_chunk`/`coerce_chunks` at `coerce.py:86`/`107`,
-`coerce_token_budget` at `coerce.py:112`, `coerce_turn`/`coerce_turns` at
-`coerce.py:46`/`81`, `coerce_cache_events` at `coerce.py:146`,
-`coerce_token_usage` at `coerce.py:168`, `coerce_tool_call` at
-`coerce.py:184`) passes dataclass instances through untouched and only
-converts primitives. `coerce_run_record` (`coerce.py:193`) coerces every
+(`coerce.py:37`, `estimate_tokens`) when not given explicitly. Every
+coercer (`coerce_chunk`/`coerce_chunks` at `coerce.py:88`/`109`,
+`coerce_token_budget` at `coerce.py:114`, `coerce_turn`/`coerce_turns` at
+`coerce.py:48`/`83`, `coerce_cache_events` at `coerce.py:148`,
+`coerce_cache_record`/`coerce_filter_record` at `coerce.py:170`/`183`,
+`coerce_token_usage` at `coerce.py:196`, `coerce_tool_call` at
+`coerce.py:212`) passes dataclass instances through untouched and only
+converts primitives. `coerce_run_record` (`coerce.py:221`) coerces every
 nested field of a whole hand-built `RunRecord` at once — this is what lets
 `ragradar_evaluate.evaluate()`/`check()` accept a bare `RunRecord` built with
 plain dicts, not just an `sNrN` id.
@@ -93,7 +101,7 @@ plain dicts, not just an `sNrN` id.
 
 ### 2.1 One-liner path: `ragradar_capture.capture(query, response, **explicit kwargs)`
 
-`api.py:217`
+`api.py:284`
 
 The signature is explicit keyword arguments (`chunks`, `final_prompt`,
 `token_budget`, `history_pre`/`history_post`, `eviction_reason`,
@@ -102,7 +110,7 @@ The signature is explicit keyword arguments (`chunks`, `final_prompt`,
 at the call site rather than being silently swallowed.
 
 1. Build a `Capture(query, pipeline)` — creates an empty
-   `RunRecord(query=query, response="")` (`api.py:78`, `Capture.__init__`).
+   `RunRecord(query=query, response="")` (`api.py:80`, `Capture.__init__`).
 2. Set `cap._record.response = response`.
 3. For each optional argument that was passed, either call the matching
    `Capture` method (`cap.chunks(...)`, `cap.history(...)`, `cap.cache(...)`,
@@ -110,15 +118,15 @@ at the call site rather than being silently swallowed.
    field directly (`final_prompt`, `token_budget`, `model`, `token_usage`).
    `token_budget` is persisted whether or not `final_prompt` is given.
 4. Call `cap.commit()`.
-5. The **entire body is wrapped in `try/except Exception`** (`api.py:249`-`274`)
+5. The **entire body is wrapped in `try/except Exception`** (`api.py:316`-`341`)
    — any internal failure is swallowed and logged to `~/.ragradar/errors.log`
-   via `_handle_error()`/`_get_logger()` (`api.py:59`, `api.py:42`), never
+   via `_handle_error()`/`_get_logger()` (`api.py:61`, `api.py:44`), never
    raised to the caller's pipeline — unless strict mode is on (§2.2).
 
 ### 2.2 Strict mode
 
-`set_strict(True)` (`api.py:25`) or the `RAGRADAR_CAPTURE_STRICT=1`
-environment variable (checked by `_strict_enabled()`, `api.py:38`) flips
+`set_strict(True)` (`api.py:27`) or the `RAGRADAR_CAPTURE_STRICT=1`
+environment variable (checked by `_strict_enabled()`, `api.py:40`) flips
 every capture method from "log and swallow" to "re-raise" — meant for
 development, to surface instrumentation bugs instead of hiding them in
 `errors.log`. The default (`False`) keeps the fail-open production
@@ -127,17 +135,19 @@ contract.
 ### 2.3 Staged path: `ragradar_capture.start()` → `cap.X()` → auto-commit
 
 ```
-cap = ragradar_capture.start(query=query, pipeline="my_project")   # api.py:205
-  └── Capture(query, pipeline)                            # api.py:69, __init__ at api.py:78
+cap = ragradar_capture.start(query=query, pipeline="my_project")   # api.py:272
+  └── Capture(query, pipeline)                            # api.py:71, __init__ at api.py:80
   └── set_active_capture(cap)                              # thread_local.py:6
-cap.chunks(chunks)          # api.py:90   → coerces each item to ChunkRecord
-cap.context(prompt, budget) # api.py:103  → sets final_prompt + TokenBudget
-cap.history(pre, post, eviction_reason)  # api.py:120 → sets history_pre/post + eviction_reason
-cap.tool_call(call)         # api.py:171  → APPENDS one ToolCallRecord (never replaces)
-cap.response(text, usage, model)  # api.py:137
+cap.chunks(chunks)          # api.py:92   → coerces each item to ChunkRecord
+cap.context(prompt, budget) # api.py:105  → sets final_prompt + TokenBudget
+cap.history(pre, post, eviction_reason)  # api.py:122 → sets history_pre/post + eviction_reason
+cap.tool_call(call)         # api.py:234  → APPENDS one ToolCallRecord (never replaces)
+cap.response(text, usage, model)  # api.py:139
   └── sets response, model, token_usage
   └── calls self.commit()          ← auto-commit on response()
-cap.cache(events)           # api.py:159  → can be called any time before commit
+cap.cache(events)           # api.py:161  → can be called any time before commit
+cap.semantic_cache(...)     # api.py:173  → sets the query-level CacheRecord
+cap.metadata_filter(...)    # api.py:207  → sets the FilterRecord
 ```
 
 Each method:
@@ -148,24 +158,28 @@ Each method:
   does not prevent `cap.history()` or `cap.response()` from still
   capturing data.
 
-`Capture.commit()` (`api.py:184`):
+`Capture.commit()` (`api.py:247`):
 1. No-ops (returns the existing id) if `self._run_id is not None` — a
    second `cap.commit()` call (or the auto-commit inside `response()` plus
    a later manual call) is a silent no-op, not a second write.
-2. `ragradar_core.store.get_or_create_session(pipeline)` — see §2.5.
-3. `store.next_run_seq(session_id)` — `MAX(run_seq)+1` for that session.
-4. `store.write_run(...)` — `INSERT` into `runs` with `run_data` as
-   `json.dumps(record.to_json())`.
-5. Sets `self._run_id = f"s{session_id}r{run_seq}"` and returns it (or
+2. `ragradar_core.store.commit_run(pipeline, record)` — resolves/creates
+   the session, assigns the next `run_seq`, and inserts the run row all
+   inside one `BEGIN IMMEDIATE` transaction (`store.py:430`). This replaced
+   an earlier three-separate-connection sequence (`get_or_create_session()`
+   + `next_run_seq()` + `write_run()`) that could race under concurrent
+   commits to the same session; `commit_run()` is documented as the
+   race-free consolidation.
+3. Sets `self._run_id = f"s{session_id}r{run_seq}"` and returns it (or
    `None` if the write failed in non-strict mode, logged to
-   `~/.ragradar/errors.log`). `cap.run_id` (`api.py:84`, a property) reads the
+   `~/.ragradar/errors.log`). `cap.run_id` (`api.py:87`, a property) reads the
    same value without re-committing.
 
 ### 2.4 Thread-local proxy functions
 
 `ragradar_capture.chunks()`, `.context()`, `.history()`, `.response()`,
-`.cache()`, `.tool_call()`, `.commit()` (module-level functions,
-`api.py:283` onward) are free functions that:
+`.cache()`, `.semantic_cache()`, `.metadata_filter()`, `.tool_call()`,
+`.commit()` (module-level functions, `api.py:350` onward) are free
+functions that:
 1. `get_active_capture()` from `thread_local.py:11` (a `threading.local`).
 2. If `None`, log an error via `_get_logger()` ("`<fn>` called with no
    active capture") and return — never raises.
@@ -178,12 +192,19 @@ thread that called `ragradar_capture.start()`.
 
 ### 2.5 Session auto-creation — `ragradar_core.store.get_or_create_session()`
 
-`packages/ragradar-core/src/ragradar_core/store.py:259`
+`packages/ragradar-core/src/ragradar_core/store.py:347`
 
-1. `connect()` (`store.py:221`) is called implicitly on every store access
+`Capture.commit()` (§2.3) no longer calls this public function directly —
+it calls `commit_run()`, which runs an equivalent private
+`_get_or_create_session_on(conn, ...)` inside its own atomic transaction.
+The public `get_or_create_session()` documented below is still live and
+used directly by `benchmark/seeder.py` for synthetic run generation
+(§4.8), so the algorithm it implements is still worth tracing here.
+
+1. `connect()` (`store.py:268`) is called implicitly on every store access
    — it creates `~/.ragradar/` and `runs.db` if missing and brings the schema
-   to `SCHEMA_VERSION` (`"3"`, `store.py:25`) via `_ensure_schema()`
-   (`store.py:123`) before any query runs. See §6 for what this means for
+   to `SCHEMA_VERSION` (`"3"`, `store.py:26`) via `_ensure_schema()`
+   (`store.py:151`) before any query runs. See §6 for what this means for
    fresh vs. pre-existing databases.
 2. Look up the most recent session for this `pipeline` (or the most recent
    session with `pipeline IS NULL` if none given).
@@ -268,7 +289,7 @@ Once a single row is settled, `loader.load_run_record(run_row)`
 This is safe because `ragradar_core.store.connect()` guarantees any
 database it opens is at the latest schema, which ships the `runs_fts`
 FTS5 virtual table and its sync triggers baked directly into the `SCHEMA`
-DDL (`ragradar_core/store.py:77`-`101`). Practically: **FTS5 is always
+DDL (`ragradar_core/store.py:82`-`103`). Practically: **FTS5 is always
 available** to `ragradar find` today. `build_search_query()` still accepts
 `fts5_available=False` and implements the plain-`LIKE` fallback
 (`query_builder.py:30`-`38`), but nothing in the current CLI path ever
@@ -298,22 +319,31 @@ multiple matches by design, unlike `resolve_target`).
 
 ### 3.5 Terminal renderer — `explain/renderer/terminal.py`
 
-`render()` (`terminal.py:208`) is the orchestrator:
+`render()` (`terminal.py:289`) is the orchestrator:
 1. Print query, response (truncated to 200 chars unless `--full`), model.
-2. Iterate `_ANALYZERS` (`terminal.py:153`) — a fixed list of
+2. Iterate `_ANALYZERS` (`terminal.py:233`) — a fixed list of
    `(module, render_fn)` pairs in a fixed order: **tokens → scores →
-   duplicates → truncation → history → cache**. For each, call
+   duplicates → truncation → history → cache → degeneracy**. For each, call
    `mod.analyze(record)`; if it returns `None` (insufficient data), **skip
    silently** — nothing is printed for that factor.
-3. If `run_row` has `eval_scores` (populated by `ragradar-evaluate run`),
+3. If `record.cache is not None`, call `semantic_cache_mod.analyze(record,
+   policy)` (loading the run's pipeline policy for its thresholds) and
+   print `_render_semantic_cache` if not `None`. Not part of the
+   `_ANALYZERS` loop — it needs the policy argument the loop doesn't pass,
+   and always renders after it regardless of list position.
+4. If `record.filter is not None`, call `metadata_filter_mod.analyze(record)`
+   and print `_render_metadata_filter` if not `None` — also outside the
+   loop, printed right after semantic cache to keep the two special-cased
+   blocks together and preserve README's stated factor order.
+5. If `run_row` has `eval_scores` (populated by `ragradar-evaluate run`),
    render an extra "Evaluation Scores" panel (`_render_eval_scores`,
-   `terminal.py:163`) — risk score, input-quality violations, RAGAS
+   `terminal.py:244`) — risk score, input-quality violations, RAGAS
    metrics if present.
-4. Print the final assembled prompt (truncated to 500 chars unless
+6. Print the final assembled prompt (truncated to 500 chars unless
    `--full`).
 
 Each analyzer module in `ragradar/explain/analyzers/` is a pure function
-`analyze(record) -> dict | None`:
+`analyze(record) -> dict | None` (nine modules total):
 
 | Module | Returns `None` when | Computes |
 |---|---|---|
@@ -323,19 +353,24 @@ Each analyzer module in `ragradar/explain/analyzers/` is a pure function
 | `truncation.py` (`truncation.py:4`) | no chunks | chunks with `truncated=True`; `severity`: `"none"` if none truncated, `"high"` if any truncated chunk has `retrieval_score>0.7` or `rerank_score>0.7`, else `"low"` |
 | `history.py` (`history.py:4`) | no history_pre AND no history_post | `dropped` = turns present in `pre` but whose `(role, content)` tuple is absent from `post`'s set; sums pre/post tokens |
 | `cache.py` (`cache.py:4`) | no `cache_events` | hit/miss counts, `hit_ratio`, lists of hit/miss chunk_ids |
+| `degeneracy.py` (`degeneracy.py:4`) | no chunks | per-chunk score = `rerank_score`, falling back to `retrieval_score`; chunks with neither excluded; `chunk_score_variance` = variance of the usable scores, `None` with fewer than two |
+| `semantic_cache.py` (`semantic_cache.py:7`, takes `policy` too) | `record.cache is None` | `borderline_hit` (similarity within `policy.cache_borderline_margin` of threshold), `stale_hit` (`cached_at` older than `policy.cache_max_age_seconds`) |
+| `metadata_filter.py` (`metadata_filter.py:4`) | `record.filter is None` | `filtered_exclusion_ratio` = `excluded_count / candidate_count`, `None` if either count is missing or `candidate_count` isn't positive |
 
 Each `_render_X` function in `terminal.py` picks a Rich `Panel` border
 color from thresholds (e.g. token utilisation <80% green, <95% yellow,
 else red; duplicate ratio 0 green, ≤20% yellow, else red — `_render_tokens`
-at `terminal.py:28`, `_render_scores` at `terminal.py:52`,
-`_render_duplicates` at `terminal.py:76`, `_render_truncation` at
-`terminal.py:97`, `_render_history` at `terminal.py:116`, `_render_cache`
-at `terminal.py:138`) and, when `--full`, appends per-item detail lines.
+at `terminal.py:38`, `_render_scores` at `terminal.py:62`,
+`_render_duplicates` at `terminal.py:86`, `_render_truncation` at
+`terminal.py:107`, `_render_history` at `terminal.py:126`, `_render_cache`
+at `terminal.py:148`, `_render_semantic_cache` at `terminal.py:163`,
+`_render_metadata_filter` at `terminal.py:197`, `_render_degeneracy` at
+`terminal.py:220`) and, when `--full`, appends per-item detail lines.
 
-`render_budget()` (`terminal.py:239`) is just `tokens_mod.analyze()` +
+`render_budget()` (`terminal.py:332`) is just `tokens_mod.analyze()` +
 `_render_tokens(..., full=True)` — used by `ragradar budget <target>`.
 
-`render_diff()` (`terminal.py:248`) — used by `ragradar diff`:
+`render_diff()` (`terminal.py:341`) — used by `ragradar diff`:
 - Query side-by-side table.
 - Chunk set difference (`chunks_b - chunks_a` = added, vice versa =
   removed) plus counts.
@@ -382,14 +417,16 @@ sense).
 
 ### 3.10 The umbrella re-export (`import ragradar`)
 
-`packages/ragradar/src/ragradar/__init__.py:1`-`75` imports and re-exports,
+`packages/ragradar/src/ragradar/__init__.py:1`-`82` imports and re-exports,
 in one place: every `ragradar_capture` entry point (`Capture`, `start`,
 `capture`, `set_strict`, `chunks`, `context`, `history`, `response`,
-`cache`, `tool_call`, `commit`), every `ragradar_evaluate` entry point
-(`check`, `evaluate`, `available_metrics`, `CheckResult`, `EvalResult`,
-`MetricInfo`, `InputQualityPolicy`), and the `ragradar_core` schema
-dataclasses (`ChunkRecord`, `TokenBudget`, `TokenUsage`, `Turn`,
-`CacheEvent`, `ToolCallRecord`, `RunRecord`). All three example scripts
+`cache`, `semantic_cache`, `metadata_filter`, `tool_call`, `commit`),
+every `ragradar_evaluate` entry point (`check`, `evaluate`,
+`available_metrics`, `CheckResult`, `EvalResult`, `MetricInfo`,
+`InputQualityPolicy`), and the `ragradar_core` schema dataclasses
+(`ChunkRecord`, `TokenBudget`, `TokenUsage`, `Turn`, `CacheEvent`,
+`CacheRecord`, `ToolCallRecord`, `RunRecord`, `FilterRecord`). All three
+example scripts
 (§5) use only `import ragradar` — never `ragradar_capture`/
 `ragradar_evaluate` directly — which is the intended day-to-day usage: a
 production pipeline that wants only the capture side without pulling in
@@ -402,17 +439,17 @@ production pipeline that wants only the capture side without pulling in
 
 Entry point: `ragradar_evaluate.cli:main` (`cli.py:118`). Its group
 callback calls `store.ensure_store()` (`cli.py:121`, which is
-`ragradar_core.store.ensure_store()` at `ragradar_core/store.py:245` —
+`ragradar_core.store.ensure_store()` at `ragradar_core/store.py:295` —
 open a connection, which self-migrates, then close it) on every
 invocation. There is no `ragradar_evaluate.store` module and no
 `apply_migration()` function anymore — both the connection/schema logic
 and the full migration chain live in `ragradar_core.store` and run
-automatically inside `connect()` (`ragradar_core/store.py:221`) for
+automatically inside `connect()` (`ragradar_core/store.py:268`) for
 **every** package's every store access, not just `ragradar-evaluate`'s.
 
 ### 4.1 Migration chain — `ragradar_core.store._ensure_schema()`
 
-`packages/ragradar-core/src/ragradar_core/store.py:123`
+`packages/ragradar-core/src/ragradar_core/store.py:151`
 
 ```
 no 'meta' table (brand-new db) → executescript(SCHEMA) in one shot: the
@@ -481,24 +518,31 @@ then writes **all** results in one transaction via
 ### 4.3 The `evaluate()`/`check()` facade — `facade.py`
 
 `packages/ragradar-evaluate/src/ragradar_evaluate/facade.py` is the entire
-public task-level API: `check()` (`facade.py:416`), `evaluate()`
-(`facade.py:298`), `available_metrics()` (`facade.py:171`). Everything
+public task-level API: `check()` (`facade.py:476`), `evaluate()`
+(`facade.py:343`), `available_metrics()` (`facade.py:216`). Everything
 else in the package (layers, policy, benchmark) is implementation detail
 the facade calls into.
 
-**Metric registry** (`facade.py:45`-`113`): a `dict[str, MetricInfo]`
+**Metric registry** (`facade.py:45`-`142`): a `dict[str, MetricInfo]`
 (`MetricInfo` dataclass at `facade.py:35`: `name`, `layer` "input"/"output",
 `cost` "free"/"llm", `requires` (RunRecord fields or `"ground_truth"`),
-`description`). Nine entries — five input (`relevance`, `duplicates`,
-`truncation`, `token_efficiency`, `coherence`) and four output
-(`faithfulness`, `answer_relevancy`, `context_precision`, `context_recall`).
-`INPUT_METRICS`/`OUTPUT_METRICS` (`facade.py:115`-`116`) are the name
-tuples derived from it; `available_metrics()` returns a fresh copy of the
-whole dict.
+`description`). **Twelve entries** — eight input (`relevance`,
+`duplicates`, `truncation`, `token_efficiency`, `coherence`, `cache_risk`,
+`filter_risk`, `score_degeneracy`) and four output (`faithfulness`,
+`answer_relevancy`, `context_precision`, `context_recall`). `cache_risk`
+and `filter_risk` key off `record.cache`/`record.filter` instead of
+`record.chunks` (`requires=("cache",)`/`("filter",)`); `evaluate()`'s
+per-metric gate (below) checks each metric's own `requires` tuple for
+`chunks`/`cache`/`filter` individually (`facade.py:407`-`414`) rather than
+one hardcoded `chunks` check applied to every metric, specifically so
+these two are not skipped for a chunk-less cache-hit run.
+`INPUT_METRICS`/`OUTPUT_METRICS`
+(`facade.py:144`-`145`) are the name tuples derived from it;
+`available_metrics()` returns a fresh copy of the whole dict.
 
-**`_resolve_target(target)`** (`facade.py:256`) accepts, in order: a bare
+**`_resolve_target(target)`** (`facade.py:301`) accepts, in order: a bare
 `RunRecord` (coerced via `ragradar_core.coerce.coerce_run_record`, pipeline
-key `"__default"`, no run identity — `facade.py:269`); anything with a
+key `"__default"`, no run identity — `facade.py:314`); anything with a
 `.run_id` attribute (e.g. a `ragradar_capture.Capture` — raises
 `ValueError` if that capture was never committed); or an `sNrN` string
 (parsed via `ragradar_core.targets.parse_target_id`, looked up via
@@ -506,14 +550,16 @@ key `"__default"`, no run identity — `facade.py:269`); anything with a
 `"__default"`).
 
 **`evaluate(target, *, metrics=None, ground_truth=None, pipeline=None,
-policy=None, save=True)`** (`facade.py:298`):
+policy=None, save=True)`** (`facade.py:343`):
 1. Validates `metrics` (rejects an empty list and unknown names) if given.
 2. Resolves the target and pipeline key.
 3. `save=True` with an identity-less target (a bare `RunRecord`) raises
    `ValueError` telling the caller to pass `save=False` or an `sNrN` id.
 4. For each requested **input** metric whose family (`relevance` →
    `input_quality.score_relevance`, etc. — the name-to-function map is
-   `_INPUT_FN`, `facade.py:120`) is applicable (`record.chunks` non-empty):
+   `_INPUT_FN`, `facade.py:149`) is applicable (per its own `requires`
+   gate — `chunks` non-empty, or `cache`/`filter` present and
+   checked/applied for `cache_risk`/`filter_risk`, see §4.3 above):
    call it, round its output via `input_quality.round_values()`, store in
    `result.metrics[name]`. Everything not requested/applicable lands in
    `result.skipped[name]` with a reason string.
@@ -528,38 +574,43 @@ policy=None, save=True)`** (`facade.py:298`):
    `record.chunks`/`record.response`/`ground_truth` per `MetricInfo.requires`,
    marking ungatable ones `skipped`. The remaining "runnable" list is
    passed as **one** call to `output_quality.score_output_quality()`
-   (`facade.py:394`-`401`). If that call raises **for any reason** (missing
+   (`facade.py:454`-`461`). If that call raises **for any reason** (missing
    `ragas` install, or a RAGAS runtime failure — `output_quality.py` itself
    only ever raises `ImportError` up front for a missing dependency;
    everything else propagates untouched), the facade catches it once and
    assigns the **same** error string to every requested-and-runnable output
    metric name in `result.errors` — there is no per-metric partial
    success once you're past the applicability gate.
-7. `save=True` persists `result.to_eval_scores()` (`facade.py:207`, the
+7. `save=True` persists `result.to_eval_scores()` (`facade.py:252`, the
    `{"input": ..., "output": ...}` shape read back by `ragradar explain`)
    plus `risk_score` via `ragradar_core.store.write_eval_scores` — the only
    persistence path.
 
-**`check(target, *, pipeline=None, policy=None)`** (`facade.py:416`):
+**`check(target, *, pipeline=None, policy=None)`** (`facade.py:476`):
 free, deterministic, no LLM, never writes except a lazy benchmark build.
 1. Resolves target/pipeline, runs `evaluate(record, metrics=list(INPUT_METRICS),
    save=False)` internally to get every input factor.
 2. No chunks → `CheckResult(verdict="warn", ...)` explaining the missing
    data, rather than an exception.
-3. `_learned_thresholds(pipeline_key)` (`facade.py:515`): reads the
+3. `_learned_thresholds(pipeline_key)` (`facade.py:575`): reads the
    `benchmark` table; if empty and ≥10 evaluated runs exist for the
    pipeline, lazily calls `ragradar_evaluate.benchmark.builder.build()` to
    populate it (a failed build — e.g. no RAGAS scores to correlate against
    — falls back silently to "use policy"). `CheckResult.thresholds` records
    which source ("learned" vs "policy") was actually used.
-4. For each of six factors (`_CHECK_FACTORS`, `facade.py:131`-`168`:
+4. For each of **eight** factors (`_CHECK_FACTORS`, `facade.py:163`-`213`:
    `duplicate_ratio`, `top_chunk_score`, `high_score_truncations`,
    `token_headroom_pct`, `source_domain_count`, `low_score_chunk_ratio`,
-   each with a direction and a human-readable problem template), compare
-   the computed value against the learned or policy threshold; `fail` on
-   the wrong side, `ok` if no value/threshold exists. `token_headroom_pct`'s
-   policy threshold is suppressed (treated as "no threshold") when the
-   record has no captured `token_budget`.
+   `filtered_exclusion_ratio`, `chunk_score_variance`, each with a
+   direction and a human-readable problem template), compare the computed
+   value against the learned or policy threshold; `fail` on the wrong
+   side, `ok` if no value/threshold exists. `token_headroom_pct`'s policy
+   threshold is suppressed (treated as "no threshold") when the record has
+   no captured `token_budget`. `filtered_exclusion_ratio` and
+   `chunk_score_variance` are advisory-only here and in
+   `check_policy_violations()` — neither is folded into
+   `compute_risk_score()`'s weighted sum below, which still only weighs
+   the original six.
 5. Overall verdict: `fail` if `risk_score > 0.7` **or** ≥3 factors failed;
    `warn` if 1–2 failed; else `ok`.
 
@@ -569,43 +620,72 @@ Each metric family is its own pure function taking a `RunRecord`
 (assuming non-empty `chunks` — callers gate on that) and returning a flat
 dict of **raw** values:
 
-- **`score_relevance`** (`input_quality.py:94`): cosine similarity between
+- **`score_relevance`** (`input_quality.py:97`): cosine similarity between
   query and chunk embeddings if `embedding_fn` is supplied (not wired into
   the CLI by default — programmatic use only), else falls back to each
   chunk's `rerank_score` then `retrieval_score`. `mean_relevance` = average
   of whatever was collected; `top_chunk_score` = max **actual** rerank
   score (never from the relevance fallback list, and `None` if no chunk
   has a rerank score).
-- **`score_duplicates`** (`input_quality.py:128`): `_detect_path_dups`
-  (`input_quality.py:35`, chunk_id repeated across ≥2 distinct
+- **`score_duplicates`** (`input_quality.py:131`): `_detect_path_dups`
+  (`input_quality.py:36`, chunk_id repeated across ≥2 distinct
   `retrieval_path`s — counts **qualifying chunk_ids**) +
-  `_detect_window_dups` (`input_quality.py:44`, pairwise within a
+  `_detect_window_dups` (`input_quality.py:45`, pairwise within a
   `source_doc_id` group: substring containment **or** token-set Jaccard
   overlap >50% — counts **qualifying PAIRS**, deduped via a `seen` set per
-  source group) + `_detect_semantic_dups` (`input_quality.py:74`, pairwise
+  source group) + `_detect_semantic_dups` (`input_quality.py:75`, pairwise
   cosine similarity > `0.92` across *different* `source_doc_id`s, only
   runs if `embedding_fn` given — reported separately, not folded into the
   ratio). `duplicate_ratio` = `(path_dup_count + window_dup_count) /
   total_chunks`.
-- **`score_truncation`** (`input_quality.py:150`): same severity logic
+- **`score_truncation`** (`input_quality.py:153`): same severity logic
   (none/low/high by score>0.7 threshold) as `ragradar explain`'s
   `truncation.py` analyzer, duplicated here so `ragradar-evaluate` has no
   runtime dependency on the `ragradar` package.
-- **`score_token_efficiency`** (`input_quality.py:175`):
+- **`score_token_efficiency`** (`input_quality.py:178`):
   `token_headroom_pct = headroom / total_limit` (0.0 when no
   `token_budget` was captured); `low_score_chunk_ratio` = fraction of
   chunks whose rerank score (or retrieval score if no rerank) is < 0.5.
-- **`score_coherence`** (`input_quality.py:202`): `source_domain_count` =
+- **`score_coherence`** (`input_quality.py:205`): `source_domain_count` =
   distinct `source_doc_id` count; `score_variance` = population variance
-  of rerank scores (`None` with fewer than 2).
-- **`check_policy_violations`** (`input_quality.py:248`) compares raw
+  of rerank scores only, no retrieval-score fallback (`None` with fewer
+  than 2).
+- **`score_score_degeneracy`** (`input_quality.py:225`): per-chunk score is
+  `rerank_score`, falling back to `retrieval_score` when absent (chunks
+  with neither excluded); `chunk_score_variance` = population variance of
+  the usable scores, `None` with fewer than 2. Deliberately a distinct key
+  from `score_coherence`'s `score_variance` above — the two are merged
+  into the same flat dict by `score_input_quality()` (and are both
+  candidate correlation factors for `benchmark/builder.py`), so sharing a
+  key would let one silently clobber the other. No `policy` argument —
+  matches `score_duplicates`/`score_token_efficiency`, not
+  `score_cache_risk` below.
+- **`score_cache_risk(record, policy)`** (`input_quality.py:259`): the one
+  family function besides `score_score_degeneracy`'s neighbors that takes
+  `policy` directly — it needs `cache_borderline_margin`/
+  `cache_max_age_seconds` mid-computation, not just for a final threshold
+  compare. Returns `None` (not a zero-value result) when
+  `record.cache is None or not record.cache.checked`. Not called by
+  `score_input_quality()` at all — gated separately in `evaluate()` on
+  `record.cache`, not `record.chunks` (§4.3).
+- **`score_filter_risk(record)`** (`input_quality.py:308`): returns `None`
+  when `record.filter is None or not record.filter.applied`, or when
+  `candidate_count`/`excluded_count` are missing or `candidate_count` isn't
+  positive (a `0.0` ratio would misrepresent "unknown" as "nothing
+  excluded"). `filtered_exclusion_ratio = excluded_count / candidate_count`.
+  Also not called by `score_input_quality()` — gated on `record.filter` in
+  `evaluate()`.
+- **`check_policy_violations`** (`input_quality.py:366`) compares raw
   values against the active `InputQualityPolicy` and appends the field
   name to `violations` for every threshold breached; only checks a
   threshold whose backing value is present, so a partial (metric-subset)
   evaluation is never flagged for values it didn't compute.
-- **`round_values`** (`input_quality.py:233`) rounds display/persistence
-  copies to 4 places; **`score_input_quality`** (`input_quality.py:301`) is
-  the all-families-at-once dispatcher used by `benchmark/checker.py`
+- **`round_values`** (`input_quality.py:351`) rounds display/persistence
+  copies to 4 places; **`score_input_quality`** (`input_quality.py:427`) is
+  the six-family dispatcher (`relevance`, `duplicates`, `truncation`,
+  `token_efficiency`, `coherence`, `score_degeneracy` — **not**
+  `cache_risk`/`filter_risk`, which key off other fields) used by
+  `benchmark/checker.py`
   (§4.7) — the `evaluate()` facade itself calls the individual family
   functions so that requesting one metric never computes the others.
 
@@ -640,12 +720,14 @@ magnitude), rounded to 4 places.
 
 ### 4.7 Policy system — `policy/schema.py`, `policy/persistence.py`
 
-`InputQualityPolicy` (`policy/schema.py:5`) is a plain dataclass of eight
-thresholds with defaults (`min_chunk_relevance_score=0.5`,
+`InputQualityPolicy` (`policy/schema.py:5`) is a plain dataclass of
+**twelve** thresholds with defaults (`min_chunk_relevance_score=0.5`,
 `min_top_chunk_score=0.7`, `max_duplicate_ratio=0.2`,
 `max_low_score_chunk_ratio=0.3`, `min_token_headroom=0.15`,
 `max_high_score_truncations=0`, `max_source_domains=3`,
-`llm_rewrite_risk_threshold=0.7`). Stored per-pipeline as JSON in the
+`llm_rewrite_risk_threshold=0.7`, `cache_borderline_margin=0.03`,
+`cache_max_age_seconds=86400`, `max_filtered_exclusion_ratio=0.3`,
+`min_score_variance=0.0001`). Stored per-pipeline as JSON in the
 `policies` table (`pipeline` PK), created as part of the v1→v2 migration
 step (or baked into a fresh schema directly, §4.1).
 
@@ -668,7 +750,7 @@ CLI (`policy show|set|reset`, `cli.py:327`):
 
 The literal string `"__default"` is the pipeline key used everywhere a
 per-pipeline lookup key is needed and no `--pipeline`/run-derived pipeline
-is available — confirmed still current in `facade.py:269`
+is available — confirmed still current in `facade.py:314`
 (`_resolve_target` for a bare `RunRecord`) and throughout `cli.py`
 (`pipeline or "__default"`, e.g. `cli.py:151`, `240`, `336`, `360`, `388`).
 
@@ -725,18 +807,24 @@ internal machinery driven by the CLI's `benchmark` subgroup, `cli.py:203`
 `store.get_benchmark(pipeline)`, rendered as a table.
 
 **`benchmark check <target> [--pipeline]`** (`cli.py:264`/`267`) →
-`checker.check(session_id, run_seq, pipeline)` (`checker.py:10`) — note
+`checker.check(session_id, run_seq, pipeline)` (`checker.py:11`) — note
 this function takes the already-parsed `(session_id, run_seq)` pair, not
 a raw target string; the CLI does `checker.check(*parse_target_id(target),
 pipeline)`.
 1. Load the run, its policy, compute fresh `input_quality.score_input_quality()`.
 2. Load the pipeline's `benchmark` rows into a `factor → row` map.
-3. For six of the nine factors (`check_factors`, `checker.py:30`-`37` — a
-   `(factor, direction)` list; `direction` is `"lower_bad"` for
-   `top_chunk_score`/`token_headroom_pct`, `"higher_bad"` for the other
-   four), compare the run's current value against the benchmark
-   threshold: `fail` if it's on the wrong side, else `ok`. If no benchmark
-   entry exists for a factor, status is unconditionally `ok`.
+3. For all eight `_CHECK_FACTORS` (`checker.py:35`: `check_factors =
+   [(factor, direction) for factor, direction, _, _ in _CHECK_FACTORS]` —
+   derived directly from `facade.py`'s `_CHECK_FACTORS`, §4.3, rather than
+   a second hardcoded list; this was a fixed bug — `checker.py` used to
+   maintain its own separate 6-then-7-entry copy that drifted out of sync
+   with `facade.py`'s list), compare the run's current value against the
+   benchmark threshold: `fail` if it's on the wrong side, else `ok`. If no
+   benchmark entry exists for a factor, status is unconditionally `ok`.
+   Note `checker.check()`'s thresholds come **only** from the learned
+   `benchmark` table, never from policy defaults — unlike `facade.check()`
+   (§4.3), it has no policy fallback, so a factor with no benchmark row
+   yet is always `ok` regardless of the run's actual value.
 4. Overall verdict: `fail` if `risk_score > 0.7` **or** ≥3 factors failed;
    `warn` if 1–2 failed; else `ok`. `risk_score` is read from the
    already-persisted `eval_scores`/`risk_score` columns
@@ -773,7 +861,7 @@ ragradar.capture("what is 2+2?", "4")
 cap = ragradar.start(query="what is RRF?", pipeline="quickstart")
 cap.chunks([{ "content": "...", "retrieval_score": 0.9, "rerank_score": 0.95 }])
   → one plain dict with only content/retrieval_score/rerank_score given;
-    coerce_chunk() (ragradar_core/coerce.py:86) fills chunk_id="chunk_0",
+    coerce_chunk() (ragradar_core/coerce.py:88) fills chunk_id="chunk_0",
     source_doc_id="unknown", token_count=estimate_tokens(content).
 run_id = cap.response("RRF combines rankings from multiple retrievers into one ranked list.")
   → auto-commits (cap.commit() is not called explicitly; response() does it)
@@ -807,6 +895,11 @@ this example used, this one stays inside the coherence threshold.
 capture touching every field:
 ```
 cap = ragradar.start(query=..., pipeline=PIPELINE)
+cap.metadata_filter(applied=True, candidate_count=6, excluded_count=2,
+                     filters={"source": "internal"})
+  → runs before retrieval, first statement in the function
+    (02_capture_patterns.py:74-79) → metadata_filter.py exclusion ratio
+    33% (2/6)
 cap.chunks(_sample_chunks())
 cap.context(prompt, {"total_limit": 4096, "chunks_allocated": 2800,
                       "history_allocated": 600, "system_allocated": 500})
@@ -823,37 +916,48 @@ cap.tool_call({"tool_name": "rerank", "arguments": {...}, "result": "...", "late
 run_id = cap.response(text, token_usage={"input_tokens": 1850, "output_tokens": 40}, model="gpt-4-turbo")
   → auto-commits
 ```
+No `cap.semantic_cache(...)` call here — this run never checks a
+semantic cache, so `explain/analyzers/semantic_cache.py` returns `None`
+and the "Cache behavior" panel doesn't render for it (only "Cache hits",
+from the per-chunk `cap.cache(...)` above, does). Verified live via
+`ragradar explain s4r3 --full` against a fresh store: this run renders
+nine panels total — Token Usage, Chunk Scores, Duplicate Chunks,
+Truncation, Dropped History, Cache Hits, Score Degeneracy, Metadata
+Filter, Final Prompt — everything except Cache behavior.
 
 **`_backdate_pipeline_runs(db_path, pipeline, minutes)`**
-(`02_capture_patterns.py:129`) is explicitly test/demo-only: it rewrites
+(`02_capture_patterns.py:137`) is explicitly test/demo-only: it rewrites
 `sessions.created_at`/`runs.created_at` directly via raw SQL for every row
 matching `pipeline`. Real pipelines never touch `runs.db` directly —
 session gaps happen naturally over wall-clock time between calls to
 `ragradar.start()`.
 
-**`pattern_multi_session_gap()`** (`02_capture_patterns.py:148`):
+**`pattern_multi_session_gap()`** (`02_capture_patterns.py:156`):
 1. Captures 2 queries under `PIPELINE` (creates session A, 2 runs).
 2. Backdates all `"rag_example"` rows 31 minutes into the past.
 3. Captures 2 more queries under `PIPELINE` — `get_or_create_session()`
    now sees the (backdated) last activity as >30 minutes stale, so it
    creates a **new** session B (2 runs).
 
-**`pattern_thread_local_proxy()`** (`02_capture_patterns.py:164`): calls
+**`pattern_thread_local_proxy()`** (`02_capture_patterns.py:172`): calls
 `ragradar.start(query=..., pipeline="proxy_demo")` then uses the
 module-level `ragradar.chunks()`/`ragradar.response()` proxies (not a
 `cap` object) — demonstrating the thread-local pattern for code that
 doesn't want to thread a `Capture` handle through its call stack. Creates
 its own session under `"proxy_demo"`.
 
-`__main__` (`02_capture_patterns.py:182`-`189`) runs
+`__main__` (`02_capture_patterns.py:190`-`197`) runs
 `pattern_multi_session_gap()`, then `pattern_thread_local_proxy()`, then
 `pattern_full_fields()` last — deliberately, so the full-fields run is
-the most recently captured one (`ragradar explain` with no target shows
-the latest run). Because `pattern_full_fields()` runs under `PIPELINE`
-again shortly after session B was created (real wall-clock time, well
-under the 30-minute idle gap), it lands as a **third run in session B**,
-not a new session. End state: `"rag_example"` has 2 sessions (A: 2 runs,
-backdated; B: 3 runs), `"proxy_demo"` has 1 session (1 run).
+the most recently captured one **within this script's own run**. In
+practice, if `03_evaluate.py` is then run afterward (per the top-level
+README's quickstart order), *its* demo run becomes the actual latest run
+across the whole store — see §5.3's note. Because `pattern_full_fields()`
+runs under `PIPELINE` again shortly after session B was created (real
+wall-clock time, well under the 30-minute idle gap), it lands as a
+**third run in session B**, not a new session. End state: `"rag_example"`
+has 2 sessions (A: 2 runs, backdated; B: 3 runs), `"proxy_demo"` has 1
+session (1 run).
 
 ### 5.3 `03_evaluate.py` — the `check()`/`evaluate()` facade
 
@@ -863,7 +967,19 @@ Runs standalone (captures its own demo run first); `PIPELINE = "rag_example"`.
 one-liner (not staged) with 4 chunks (`rrf_1`/`rrf_2` overlapping-content
 pair, `bm25_1` truncated with rerank 0.88, `win_1` with rerank 0.39) and a
 `token_budget` dict (headroom again derives to 196/4096 ≈ 4.8%). No
-history/cache/tool_calls captured here. Returns the run's `sNrN` id.
+history/cache/tool_calls/metadata-filter captured here. Returns the run's
+`sNrN` id.
+
+**Sequencing note, verified live:** if this script is run *after*
+`02_capture_patterns.py` (per the top-level README's quickstart order),
+this call's run becomes the actual latest run across the whole store —
+superseding `02_capture_patterns.py`'s `pattern_full_fields()` run (§5.2)
+as the target of a target-less `ragradar explain --full`. Since this run
+has no history/cache/metadata-filter, only **five** panels render for it:
+Token Usage, Chunk Scores, Duplicate Chunks, Truncation, Score Degeneracy
+— not the nine `pattern_full_fields()`'s run shows. The two demo runs
+serve different illustrative purposes but only one of them is actually
+"latest" once both scripts have run.
 
 **`show_check(run_id)`** (`03_evaluate.py:84`): `ragradar.check(run_id)` →
 prints `verdict`/`risk_score`/`thresholds` plus a factor-by-factor table
@@ -875,17 +991,22 @@ prints `verdict`/`risk_score`/`thresholds` plus a factor-by-factor table
 `duplicate_ratio`/`path_dup_count`/`window_dup_count`.
 
 **`show_full_evaluate(run_id)`** (`03_evaluate.py:124`):
-`ragradar.evaluate(run_id)` — `metrics=None` runs every applicable metric
-(all 5 input families; all 4 RAGAS output metrics if `ragas` is
-installed) and `save=True` (default) persists the result. Prints
-`result.saved`, `risk_score`, `policy_violations`, a metrics table, and
-(if `ragas` isn't installed or fails) the shared error string from
-`result.errors` for each requested output metric — this is the fail-soft
-path traced in §4.3 step 6, demonstrated live.
+`ragradar.evaluate(run_id)` — `metrics=None` runs every applicable metric.
+For this run: 6 of the 8 input families compute (`relevance`,
+`duplicates`, `truncation`, `token_efficiency`, `coherence`,
+`score_degeneracy`); `cache_risk`/`filter_risk` land in `result.skipped`
+("not applicable: run never checked a semantic cache" /
+"...never applied a metadata filter") since this run has neither. All 4
+RAGAS output metrics are attempted if `ragas` is installed. `save=True`
+(default) persists the result. Prints `result.saved`, `risk_score`,
+`policy_violations`, a metrics table, and (if `ragas` isn't installed or
+fails) the shared error string from `result.errors` for each requested
+output metric — this is the fail-soft path traced in §4.3 step 6,
+demonstrated live.
 
 **`show_available_metrics()`** (`03_evaluate.py:155`):
-`ragradar.available_metrics()` → prints all 9 registered `MetricInfo`
-entries (name, layer, cost, requires).
+`ragradar.available_metrics()` → prints all **twelve** registered
+`MetricInfo` entries (name, layer, cost, requires) — see §4.3.
 
 `__main__` (`03_evaluate.py:166`-`177`) runs all four functions in order,
 then prints a pointer to `ragradar explain <run_id>` (to see the same
@@ -907,7 +1028,7 @@ scores rendered alongside the run analysis) and
 
 - **The store always exists after any access — there is no "missing
   runs.db" state to special-case.** `ragradar_core.store.connect()`
-  (`store.py:221`) unconditionally creates `~/.ragradar/` and `runs.db` (if
+  (`store.py:268`) unconditionally creates `~/.ragradar/` and `runs.db` (if
   missing) and brings the schema to the latest version before returning a
   connection. There is no `_connect()` helper anywhere that returns `None`
   for a missing file — that was true of an earlier per-package store
@@ -937,7 +1058,7 @@ scores rendered alongside the run analysis) and
   window-dup detection and reports `duplicate_ratio` as **distinct
   chunk_ids** implicated in any dup, divided by total chunks.
   `ragradar-evaluate`'s `input_quality._detect_window_dups`
-  (`layers/input_quality.py:44`) does substring containment **or** >50%
+  (`layers/input_quality.py:45`) does substring containment **or** >50%
   token-set Jaccard overlap, and reports `window_dup_count` as the number
   of qualifying **pairs** (deduped per source group), which feeds into
   `duplicate_ratio = (path_dup_count + window_dup_count) / total_chunks` —
@@ -952,7 +1073,7 @@ scores rendered alongside the run analysis) and
 
 - **`"__default"` pipeline key**: the literal string `"__default"` is used
   everywhere a per-pipeline lookup key is needed and no `--pipeline`/
-  run-derived pipeline is available — confirmed in `facade.py:269` and
+  run-derived pipeline is available — confirmed in `facade.py:314` and
   throughout `ragradar_evaluate/cli.py`'s command bodies. (Seeded benchmark
   pipelines use a different literal, `f"{pipeline}__seeded"` —
   `benchmark/seeder.py:13` — not the default-pipeline convention; don't

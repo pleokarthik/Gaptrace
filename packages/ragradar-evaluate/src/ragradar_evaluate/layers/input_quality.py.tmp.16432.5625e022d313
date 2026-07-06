@@ -1,8 +1,8 @@
 """Deterministic input-quality metrics.
 
 Each metric family (relevance, duplicates, truncation, token_efficiency,
-coherence, score_degeneracy) is computed by its own pure function taking
-a RunRecord and returning a flat dict of RAW values. Policy checks (check_policy_violations,
+coherence) is computed by its own pure function taking a RunRecord and
+returning a flat dict of RAW values. Policy checks (check_policy_violations,
 and the risk asymmetry noted there) run on raw values; round_values()
 produces the rounded copy used for display and persistence — a raw
 0.300049 violates a 0.3 threshold even though it displays as 0.3.
@@ -222,40 +222,6 @@ def score_coherence(record: RunRecord) -> dict:
     }
 
 
-def score_score_degeneracy(record: RunRecord) -> dict:
-    """Score-degeneracy family: does this run's chunk scoring actually
-    discriminate between chunks? Pure.
-
-    Per-chunk score falls back to retrieval_score when rerank_score is
-    absent — identical to score_token_efficiency's low_score_chunks
-    fallback. Chunks with neither score are excluded from the variance
-    calculation. chunk_score_variance is None with fewer than two usable
-    scores (variance is undefined with <2 points; check_policy_violations
-    already skips None values).
-
-    Named chunk_score_variance rather than score_variance to avoid
-    colliding with score_coherence's existing (differently computed,
-    rerank-only) score_variance key — the two get merged into the same
-    flat dict by score_input_quality() and are also both candidates for
-    benchmark/builder.py's INPUT_FACTORS, so a shared key would silently
-    clobber one with the other.
-    """
-    chunks = record.chunks
-    usable_scores = [
-        c.rerank_score if c.rerank_score is not None else c.retrieval_score for c in chunks
-    ]
-    usable_scores = [s for s in usable_scores if s is not None]
-
-    chunk_score_variance = None
-    if len(usable_scores) > 1:
-        mean = sum(usable_scores) / len(usable_scores)
-        chunk_score_variance = round(
-            sum((s - mean) ** 2 for s in usable_scores) / len(usable_scores), 4
-        )
-
-    return {"chunk_score_variance": chunk_score_variance}
-
-
 def score_cache_risk(record: RunRecord, policy: InputQualityPolicy) -> dict | None:
     """Cache-risk family: does this run's semantic-cache check look
     trustworthy? Pure.
@@ -305,6 +271,39 @@ def score_cache_risk(record: RunRecord, policy: InputQualityPolicy) -> dict | No
     }
 
 
+def score_score_degeneracy(record: RunRecord) -> dict:
+    """Score-degeneracy family: does this run's chunk scoring actually
+    discriminate between chunks? Pure.
+
+    Per-chunk score falls back to retrieval_score when rerank_score is
+    absent — identical to score_token_efficiency's low_score_chunks
+    fallback. Chunks with neither score are excluded from the variance
+    calculation. chunk_score_variance is None with fewer than two usable
+    scores (variance is undefined with <2 points; check_policy_violations
+    already skips None values, same as every other optional signal).
+
+    Named chunk_score_variance, not score_variance: score_coherence
+    already returns a "score_variance" key (rerank-scores-only, no
+    fallback, no exclusion guard) that benchmark/builder.py's
+    INPUT_FACTORS keys off of — reusing that name here would silently
+    clobber it when both families' raw dicts are merged.
+    """
+    chunks = record.chunks
+    usable_scores = [
+        c.rerank_score if c.rerank_score is not None else c.retrieval_score for c in chunks
+    ]
+    usable_scores = [s for s in usable_scores if s is not None]
+
+    chunk_score_variance = None
+    if len(usable_scores) > 1:
+        mean = sum(usable_scores) / len(usable_scores)
+        chunk_score_variance = round(
+            sum((s - mean) ** 2 for s in usable_scores) / len(usable_scores), 4
+        )
+
+    return {"chunk_score_variance": chunk_score_variance}
+
+
 def score_filter_risk(record: RunRecord) -> dict | None:
     """Filter-risk family: how much of the candidate pool did a metadata
     filter exclude before retrieval/scoring ever saw it? Pure.
@@ -334,40 +333,6 @@ def score_filter_risk(record: RunRecord) -> dict | None:
     }
 
 
-def score_score_margin(record: RunRecord, policy: InputQualityPolicy) -> dict | None:
-    """Score-margin family: bundles two margin diagnostics around the top
-    chunk's score into one function. Pure.
-
-    Per-chunk score falls back to retrieval_score when rerank_score is
-    absent -- identical to score_score_degeneracy's fallback. Returns
-    None for the whole function (not a partial dict) with fewer than
-    two chunks carrying a usable score -- a margin needs two scores to
-    compare, same guard precedent as score_score_degeneracy's variance.
-
-    top_second_margin (top score minus second-highest score) is THE
-    CHECKED FACTOR -- a thin margin means the retriever isn't decisively
-    ahead on its top pick. threshold_margin (top score minus
-    policy.min_top_chunk_score) is diagnostic-only context riding on the
-    boundary the top_chunk_score factor already owns -- it has no policy
-    field or _CHECK_FACTORS entry of its own.
-    """
-    chunks = record.chunks
-    usable_scores = [
-        c.rerank_score if c.rerank_score is not None else c.retrieval_score for c in chunks
-    ]
-    usable_scores = [s for s in usable_scores if s is not None]
-
-    if len(usable_scores) < 2:
-        return None
-
-    scores = sorted(usable_scores, reverse=True)
-
-    return {
-        "top_second_margin": scores[0] - scores[1],
-        "threshold_margin": scores[0] - policy.min_top_chunk_score,
-    }
-
-
 # Values rounded (to 4 places) for display/persistence only. Everything
 # else a family returns is an int, a string, None, or already rounded at
 # computation (score_variance).
@@ -379,8 +344,6 @@ _ROUND_KEYS = (
     "cache_similarity_score",
     "cache_threshold",
     "filtered_exclusion_ratio",
-    "top_second_margin",
-    "threshold_margin",
 )
 
 
@@ -453,14 +416,6 @@ def check_policy_violations(
     if val is not None and val > policy.max_filtered_exclusion_ratio:
         violations.append("max_filtered_exclusion_ratio")
 
-    val = values.get("chunk_score_variance")
-    if val is not None and val < policy.min_score_variance:
-        violations.append("min_score_variance")
-
-    val = values.get("top_second_margin")
-    if val is not None and val < policy.min_top_second_margin:
-        violations.append("min_top_second_margin")
-
     return violations
 
 
@@ -484,7 +439,6 @@ def score_input_quality(
     raw.update(score_truncation(record))
     raw.update(score_token_efficiency(record))
     raw.update(score_coherence(record))
-    raw.update(score_score_degeneracy(record))
 
     violations = check_policy_violations(raw, policy, record)
     values = round_values(raw)

@@ -101,6 +101,26 @@ _METRICS: dict[str, MetricInfo] = {
             "candidate/excluded counts).",
         ),
         MetricInfo(
+            "score_degeneracy",
+            "input",
+            "free",
+            ("chunks",),
+            "Chunk-score variance (rerank falling back to retrieval): "
+            "near-zero variance means scores aren't discriminating between "
+            "chunks, a sign of a structural retrieval failure rather than "
+            "a normal quality judgment call.",
+        ),
+        MetricInfo(
+            "score_margin",
+            "input",
+            "free",
+            ("chunks",),
+            "Top-vs-second chunk score margin (checked factor) bundled with "
+            "top-vs-threshold margin (diagnostic-only context on the "
+            "existing min_top_chunk_score boundary): a thin top_second_margin "
+            "means the retriever isn't decisively ahead on its top pick.",
+        ),
+        MetricInfo(
             "faithfulness",
             "output",
             "llm",
@@ -144,9 +164,19 @@ _INPUT_FN = {
     "coherence": "score_coherence",
     "cache_risk": "score_cache_risk",
     "filter_risk": "score_filter_risk",
+    "score_degeneracy": "score_score_degeneracy",
+    "score_margin": "score_score_margin",
 }
 
-# The six factors check() compares against thresholds, with the direction
+# Metric families whose function needs the active policy passed in during
+# computation (not just a final compare against a computed value) --
+# score_cache_risk needs it for borderline/stale thresholds, score_score_margin
+# needs it for threshold_margin. Everything else's family function is
+# policy-free; check_policy_violations()/_CHECK_FACTORS compare its raw
+# output against the policy afterward instead.
+_POLICY_ARG_METRICS = {"cache_risk", "score_margin"}
+
+# The nine factors check() compares against thresholds, with the direction
 # in which a value is bad, the policy field naming the default threshold,
 # and a human-readable problem template.
 _CHECK_FACTORS = [
@@ -191,6 +221,20 @@ _CHECK_FACTORS = [
         "higher_bad",
         "max_filtered_exclusion_ratio",
         "{value:.0%} of candidates excluded by metadata filter (max {threshold:.0%})",
+    ),
+    (
+        "chunk_score_variance",
+        "lower_bad",
+        "min_score_variance",
+        "chunk score variance {value:.4f} below {threshold:.4f} minimum "
+        "(scores aren't discriminating between chunks)",
+    ),
+    (
+        "top_second_margin",
+        "lower_bad",
+        "min_top_second_margin",
+        "top-second margin {value:.2f} below {threshold:.2f} minimum "
+        "(top chunk isn't decisively ahead of the runner-up)",
     ),
 ]
 
@@ -396,7 +440,7 @@ def evaluate(
             result.skipped[name] = "not applicable: run never applied a metadata filter"
             continue
         family_fn = getattr(input_quality, _INPUT_FN[name])
-        if "cache" in info.requires:
+        if name in _POLICY_ARG_METRICS:
             if policy is None:
                 policy = load_policy(pipeline_key)
             values = family_fn(record, policy)

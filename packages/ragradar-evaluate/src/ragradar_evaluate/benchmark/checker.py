@@ -3,6 +3,7 @@ import json
 from ragradar_core import store
 from ragradar_core.schema import RunRecord
 
+from ragradar_evaluate.facade import _CHECK_FACTORS
 from ragradar_evaluate.layers import input_quality
 from ragradar_evaluate.policy.persistence import load_policy
 
@@ -27,14 +28,11 @@ def check(
     factors = {}
     fail_count = 0
 
-    check_factors = [
-        ("duplicate_ratio", "higher_bad"),
-        ("top_chunk_score", "lower_bad"),
-        ("high_score_truncations", "higher_bad"),
-        ("token_headroom_pct", "lower_bad"),
-        ("source_domain_count", "higher_bad"),
-        ("low_score_chunk_ratio", "higher_bad"),
-    ]
+    # Factor/direction pairs mirror facade.py's _CHECK_FACTORS (the single
+    # source of truth for which factors check() evaluates); this check()
+    # only needs the factor name and direction, not the policy field or
+    # human-readable template used against learned benchmarks.
+    check_factors = [(factor, direction) for factor, direction, _, _ in _CHECK_FACTORS]
 
     for factor, direction in check_factors:
         value = input_scores.get(factor) if input_scores else None

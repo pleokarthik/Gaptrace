@@ -112,11 +112,14 @@ class RunRecord:
     history_post:    Optional[list[Turn]]          # history management
     eviction_reason: Optional[str]                 # history management
     cache_events:    Optional[list[CacheEvent]]    # cache layer
+    tool_calls:      Optional[list[ToolCallRecord]] # tool-call layer
     model:           Optional[str]                 # LLM call
     token_usage:     Optional[TokenUsage]          # LLM call
+    cache:           Optional[CacheRecord]         # semantic-cache stage
+    filter:          Optional[FilterRecord]        # metadata-filter stage
 ```
 
-This optionality contract means a pipeline instrumented with only `ragradar_capture.capture(query, response)` produces a valid RunRecord with two fields. A fully instrumented pipeline populates all eleven. The analysis tools (ragradar explain, ragradar-evaluate) check for the presence of each field before computing — if `chunks` is None, the duplicates analyzer returns None and the renderer skips that panel silently.
+This optionality contract means a pipeline instrumented with only `ragradar_capture.capture(query, response)` produces a valid RunRecord with two fields. A fully instrumented pipeline populates all fourteen. The analysis tools (ragradar explain, ragradar-evaluate) check for the presence of each field before computing — if `chunks` is None, the duplicates analyzer returns None and the renderer skips that panel silently.
 
 ### ChunkRecord
 
@@ -407,7 +410,7 @@ The user enters a number to select a run. Invalid input or Enter cancels the ope
 
 ## 7. Analysis — ragradar explain
 
-Nine analysis factors are computed deterministically at read time from captured run data. Each factor is implemented as a standalone analyzer module in `ragradar/explain/analyzers/`. Every analyzer follows the same contract: it takes a `RunRecord`, checks whether the required data is present, and returns either a structured dict or `None`. The renderer skips any factor that returned `None` — there is no error, no placeholder, no "data not available" message.
+Ten analysis factors are computed deterministically at read time from captured run data. Each factor is implemented as a standalone analyzer module in `ragradar/explain/analyzers/`. Every analyzer follows the same contract: it takes a `RunRecord`, checks whether the required data is present, and returns either a structured dict or `None`. The renderer skips any factor that returned `None` — there is no error, no placeholder, no "data not available" message.
 
 ### tokens.py
 
@@ -441,6 +444,22 @@ Requires `history_pre` or `history_post`. Computes pre and post turn counts, ide
 
 Requires `cache_events`. Counts hits and misses, computes the hit ratio, and lists the chunk IDs for each category.
 
+### degeneracy.py
+
+Requires `chunks`. Computes chunk-score variance — per-chunk score is `rerank_score`, falling back to `retrieval_score` when absent; chunks with neither are excluded. Returns `None` for the variance with fewer than two chunks carrying a usable score (variance is undefined with under two points). Near-zero variance means the retriever isn't discriminating between chunks at all — the same signal `ragradar-evaluate`'s `score_degeneracy` metric computes, under the distinct key `chunk_score_variance` (kept separate from `coherence`'s `score_variance`, which is rerank-only with no fallback).
+
+### semantic_cache.py
+
+Requires `cache` (the query-level semantic-cache check, distinct from the per-chunk `cache_events` above). Not a separate analyzer entry in the generic loop — the renderer calls it directly, since it needs the active pipeline's `InputQualityPolicy` for its thresholds. Flags a `borderline_hit` when a cache hit's similarity score landed within `cache_borderline_margin` of the cache's own threshold, and a `stale_hit` when a hit's `cached_at` is older than `cache_max_age_seconds`. Renders "Not checked" if `record.cache.checked` is `False`.
+
+### metadata_filter.py
+
+Requires `filter`. Also rendered outside the generic loop, directly after semantic cache, to preserve display order. Computes `filtered_exclusion_ratio` — the share of the candidate pool a metadata filter excluded before retrieval/scoring ever saw it — `None` when `candidate_count`/`excluded_count` weren't captured or `candidate_count` isn't positive. Renders "Not applied" if `record.filter.applied` is `False`.
+
+### margin.py
+
+Requires `chunks`. Not a separate analyzer entry in the generic loop either — like `semantic_cache.py`, the renderer calls it directly (rendered last, after the metadata filter) because it needs the active pipeline's `InputQualityPolicy`. Mirrors `ragradar-evaluate`'s `score_score_margin`: `top_second_margin` (top chunk score minus the runner-up's, rerank falling back to retrieval, same convention as `degeneracy.py`) and `threshold_margin` (top chunk score minus `min_top_chunk_score`, diagnostic-only). Returns `None` with fewer than two chunks carrying a usable score.
+
 ### Final prompt
 
 Not a separate analyzer — the renderer checks `record.final_prompt` directly. In compact mode, the first 500 characters are shown. In full mode, the entire prompt is displayed. In HTML mode, the prompt is rendered inside a `<pre>` block.
@@ -459,7 +478,7 @@ Not a separate analyzer — the renderer checks `record.final_prompt` directly. 
 
 ### Two-layer design
 
-The public API is task-shaped: `check(target)` answers "is this run healthy?" (all free input metrics vs the current standards — learned benchmark thresholds once ≥10 evaluated runs exist for the pipeline, policy defaults before that; `CheckResult.thresholds` says which); `evaluate(target, metrics=None, ground_truth=None, policy=None, save=True)` scores everything applicable or exactly the atomic metrics named, returning an `EvalResult` (per-metric results, `skipped` reasons, a single `errors` channel for both missing and failing RAGAS, `risk_score` that is `None` when input metrics weren't computed, and save semantics); `available_metrics()` lists the nine metrics with layer/cost/requirements. Targets are `sNrN` strings, committed `Capture` objects, or bare `RunRecord`s (which cannot be saved). `evaluate()` is the only persistence path — the CLI routes through it.
+The public API is task-shaped: `check(target)` answers "is this run healthy?" (all free input metrics vs the current standards — learned benchmark thresholds once ≥10 evaluated runs exist for the pipeline, policy defaults before that; `CheckResult.thresholds` says which); `evaluate(target, metrics=None, ground_truth=None, policy=None, save=True)` scores everything applicable or exactly the atomic metrics named, returning an `EvalResult` (per-metric results, `skipped` reasons, a single `errors` channel for both missing and failing RAGAS, `risk_score` that is `None` when input metrics weren't computed, and save semantics); `available_metrics()` lists the thirteen metrics with layer/cost/requirements. Targets are `sNrN` strings, committed `Capture` objects, or bare `RunRecord`s (which cannot be saved). `evaluate()` is the only persistence path — the CLI routes through it.
 
 Under the facade, evaluation is split into two layers that run independently. Layer 1 (input quality) is deterministic, requires no LLM, and uses only stdlib math; each metric family (relevance, duplicates, truncation, token_efficiency, coherence) is its own function, so selecting one never computes the others. Layer 2 (output quality) uses RAGAS with an LLM-as-judge, passing exactly the selected metric objects to the judge. The `--input-only` flag maps to the input metric set, and the RAGAS import is deferred — it happens inside the function body, not at module top level — so input-only evaluation runs even if RAGAS is not installed.
 
@@ -484,6 +503,14 @@ When `embedding_fn` is None, relevance falls back to the scores already on `Chun
 **Duplicate detection.** Path and window duplicates use the same logic as the ragradar analyzer. Semantic duplicates are detected only when `embedding_fn` is provided: chunk pairs from different source documents with cosine similarity above 0.92 are flagged.
 
 **Truncation, token efficiency, coherence.** Same signals as the ragradar analyzers — truncation count and severity, headroom as a percentage of total limit, low-score chunk ratio, source domain count, and rerank score variance.
+
+**Cache risk.** Not part of the `score_input_quality()` dispatcher above — it keys off `record.cache` instead of `record.chunks` and is gated separately in `evaluate()`, returning `None` (not a zero-value result) for a run that never checked a semantic cache. Flags a `borderline_hit` when a cache hit's similarity score landed within `cache_borderline_margin` of the cache's own threshold, and a `stale_hit` when a hit's `cached_at` is older than `cache_max_age_seconds`.
+
+**Filter risk.** Also outside the chunks-based dispatcher — keys off `record.filter`, `None` for a run that never applied a metadata filter or didn't report `candidate_count`/`excluded_count` (a `0.0` ratio would misrepresent unknown data as "nothing excluded"). Computes `filtered_exclusion_ratio`, the share of the candidate pool excluded before retrieval/scoring ever saw it. Advisory-only: surfaced through `_CHECK_FACTORS` and `check_policy_violations()` but deliberately not folded into `compute_risk_score()`'s weighted sum, so it can't silently reweight the existing six signals below.
+
+**Score degeneracy.** A chunk-score variance check — rerank score, falling back to retrieval score, across the run's chunks (chunks with neither score excluded). Near-zero variance means the retriever isn't discriminating between chunks at all, which points at a structural failure (a broken embedding or degraded index) rather than a normal relevance judgment call. Undefined (`None`) with fewer than two chunks carrying a usable score. Tracked under `chunk_score_variance` — deliberately not `score_variance`, which is already used by the coherence signal above (rerank-only, no fallback) and would otherwise collide in the merged output dict.
+
+**Score margin.** Two margin diagnostics around the top chunk's score, bundled into one function, `score_score_margin()`, rather than shipped as two competing factors. Like `score_cache_risk`, it takes the active policy directly — `threshold_margin` needs `min_top_chunk_score` mid-computation, not just a final compare — and is therefore gated separately in `evaluate()` rather than run by the `score_input_quality()` dispatcher above. `top_second_margin` (top chunk score minus the runner-up's, same rerank-falling-back-to-retrieval convention as score degeneracy) is THE CHECKED FACTOR: a thin margin means the retriever isn't decisively ahead on its top pick. `threshold_margin` (top chunk score minus `min_top_chunk_score`) is diagnostic-only — it rides on the boundary the `top_chunk_score` factor already owns, so it deliberately has no policy field and no `_CHECK_FACTORS` entry of its own; it is not a tenth checked factor, just context alongside the ninth. Returns `None` (not a partial dict) with fewer than two chunks carrying a usable score.
 
 **Policy violations.** Each signal is checked against the active `InputQualityPolicy`. Violations are collected as a list of field names (e.g., `["max_high_score_truncations", "min_token_headroom", "max_source_domains"]`). The `passes_policy` boolean is `True` only when the violations list is empty.
 
@@ -519,6 +546,11 @@ class InputQualityPolicy:
     max_high_score_truncations: int   = 0     # any high-score truncation is a problem
     max_source_domains:         int   = 3     # >3 sources fragments coherence
     llm_rewrite_risk_threshold: float = 0.7   # gates future ragradar-improve rewrite stage
+    cache_borderline_margin:    float = 0.03  # similarity this close to threshold is a near-miss
+    cache_max_age_seconds:      int   = 86400 # cached answer older than this is stale
+    max_filtered_exclusion_ratio: float = 0.3 # >30% excluded by a metadata filter is opaque
+    min_score_variance:         float = 0.0001 # below this, chunk scores aren't discriminating
+    min_top_second_margin:      float = 0.05  # top chunk should lead the runner-up by this much
 ```
 
 Policies are stored per-pipeline in the `policies` table as JSON. `load_policy(pipeline)` returns the stored policy or falls back to `InputQualityPolicy.default()` if none is set. `save_policy` writes a policy, `reset_policy` deletes it (reverting to defaults). The CLI exposes `ragradar-evaluate policy show`, `policy set <field> <value>`, and `policy reset`.

@@ -18,67 +18,122 @@ PIPELINE = "rag_example"
 
 
 def capture_demo_run() -> str:
-    """Capture one run with deliberately mixed-quality retrieval.
+    """Capture one run with deliberately mixed-quality retrieval, staged
+    end-to-end so every ragradar explain panel that *can* fire on this
+    record shape has data to render.
 
-    Plain dicts throughout — no schema types needed; headroom is derived
-    from the budget allocations.
+    Matches the field breadth of 02_capture_patterns.py's
+    pattern_full_fields() (metadata filter, chunks, context, history,
+    cache, tool call) so this run — the reader's actual latest run,
+    since 03 runs after 02 in the documented order — lights up the same
+    panels rather than the thinner set the one-liner capture() used to
+    produce. Literal reuse of pattern_full_fields()/_sample_chunks() isn't
+    possible since "02_capture_patterns" starts with a digit and can't be
+    imported as a plain Python module, so the same field coverage is
+    mirrored here via the staged Capture API instead of the one-liner.
+
+    requested_chunk_count=4 exactly matches the 4 chunks below (a clean
+    score_underfill reading, underfill_ratio 0.0) — deliberately
+    contrasting with 02_capture_patterns.py's under-filled demo run.
+    Cache behavior (semantic_cache) is the one panel that structurally
+    can't fire here: no example script calls cap.semantic_cache().
     """
-    run_id = ragradar.capture(
-        "what is RRF and how does it normalize scores?",
-        "RRF replaces raw scores with rank-based reciprocal values.",
-        pipeline=PIPELINE,
-        # requested_chunk_count=4 matches the 4 chunks below exactly --
-        # a clean score_underfill reading (underfill_ratio 0.0), contrast
-        # with 02_capture_patterns.py's under-filled demo run.
-        requested_chunk_count=4,
-        chunks=[
-            {
-                "chunk_id": "rrf_1",
-                "source_doc_id": "rrf_paper",
-                "content": "Reciprocal Rank Fusion normalizes scores from different retrieval systems",
-                "token_count": 180,
-                "retrieval_score": 0.85,
-                "rerank_score": 0.92,
-                "retrieval_path": "hybrid",
-            },
-            {
-                "chunk_id": "rrf_2",
-                "source_doc_id": "rrf_paper",
-                "content": (
-                    "Reciprocal Rank Fusion normalizes scores from different "
-                    "retrieval systems and ranks documents accordingly."
-                ),
-                "token_count": 160,
-                "retrieval_score": 0.71,
-                "rerank_score": 0.78,
-                "retrieval_path": "bm25",
-            },
-            {
-                "chunk_id": "bm25_1",
-                "source_doc_id": "ir_textbook",
-                "content": "BM25 computes relevance using term frequency and inverse document frequency.",
-                "token_count": 140,
-                "retrieval_score": 0.82,
-                "rerank_score": 0.88,
-                "retrieval_path": "bm25",
-                "truncated": True,
-            },
-            {
-                "chunk_id": "win_1",
-                "source_doc_id": "rag_patterns",
-                "content": "Context window management determines which chunks survive token budgets.",
-                "token_count": 145,
-                "retrieval_score": 0.48,
-                "rerank_score": 0.39,
-                "retrieval_path": "bm25",
-            },
-        ],
-        token_budget={
+    cap = ragradar.start("what is RRF and how does it normalize scores?", pipeline=PIPELINE)
+
+    # Metadata filter runs before retrieval; excluded candidates never reach scoring.
+    cap.metadata_filter(
+        applied=True,
+        candidate_count=6,
+        excluded_count=2,
+        filters={"source": "internal"},
+    )
+
+    chunks = [
+        {
+            "chunk_id": "rrf_1",
+            "source_doc_id": "rrf_paper",
+            "content": "Reciprocal Rank Fusion normalizes scores from different retrieval systems",
+            "token_count": 180,
+            "retrieval_score": 0.85,
+            "rerank_score": 0.92,
+            "retrieval_path": "hybrid",
+        },
+        {
+            "chunk_id": "rrf_2",
+            "source_doc_id": "rrf_paper",
+            "content": (
+                "Reciprocal Rank Fusion normalizes scores from different "
+                "retrieval systems and ranks documents accordingly."
+            ),
+            "token_count": 160,
+            "retrieval_score": 0.71,
+            "rerank_score": 0.78,
+            "retrieval_path": "bm25",
+        },
+        {
+            "chunk_id": "bm25_1",
+            "source_doc_id": "ir_textbook",
+            "content": "BM25 computes relevance using term frequency and inverse document frequency.",
+            "token_count": 140,
+            "retrieval_score": 0.82,
+            "rerank_score": 0.88,
+            "retrieval_path": "bm25",
+            "truncated": True,
+        },
+        {
+            "chunk_id": "win_1",
+            "source_doc_id": "rag_patterns",
+            "content": "Context window management determines which chunks survive token budgets.",
+            "token_count": 145,
+            "retrieval_score": 0.48,
+            "rerank_score": 0.39,
+            "retrieval_path": "bm25",
+        },
+    ]
+    # requested_count=4 matches len(chunks) exactly -- see docstring.
+    cap.chunks(chunks, requested_count=4)
+
+    prompt = (
+        "System: answer using context.\n\nContext:\n"
+        + "\n".join(f"[{i}] {c['content']}" for i, c in enumerate(chunks, 1))
+        + "\n\nQuery: what is RRF and how does it normalize scores?"
+    )
+    cap.context(
+        prompt,
+        {
             "total_limit": 4096,
             "chunks_allocated": 2800,
             "history_allocated": 600,
             "system_allocated": 500,
         },
+    )
+
+    cap.history(
+        pre=[
+            {"user": "Can you summarize RRF for me first?"},
+            {"assistant": "Sure -- RRF combines rankings from multiple systems."},
+            {"user": "Now explain how it normalizes scores."},
+        ],
+        post=[
+            {"user": "Now explain how it normalizes scores."},
+        ],
+        eviction_reason="token_budget",
+    )
+
+    cap.cache({"rrf_1": True, "rrf_2": False, "bm25_1": False, "win_1": False})
+
+    cap.tool_call(
+        {
+            "tool_name": "rerank",
+            "arguments": {"chunk_ids": [c["chunk_id"] for c in chunks]},
+            "result": f"reranked {len(chunks)} chunks",
+            "latency_ms": 38.0,
+        }
+    )
+
+    run_id = cap.response(
+        "RRF replaces raw scores with rank-based reciprocal values.",
+        token_usage={"input_tokens": 1850, "output_tokens": 40},
         model="gpt-4-turbo",
     )
     console.print(f"Captured [cyan]{run_id}[/cyan]")

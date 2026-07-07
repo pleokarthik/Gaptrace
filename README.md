@@ -97,29 +97,41 @@ ragradar-evaluate policy show
 
 ## What ragradar explain shows
 
-Ten analysis factors, computed deterministically from captured data.
-Each factor is skipped silently if the required data was not captured.
+Eleven analysis factors, computed deterministically from captured data
+(plus the assembled prompt, rendered as-is rather than analyzed). Each
+factor is skipped silently if the required data was not captured.
 
 ```
-Token usage       — per-section breakdown, headroom, model limit
-Duplicate chunks  — path dups, window dups, semantic dups
-Chunk scores      — retrieval + rerank score distribution
-Truncation        — which chunks were trimmed, at what score
-Score degeneracy  — chunk-score variance; near-zero means scores aren't discriminating
-Dropped history   — what was evicted, why, what survived
-Cache hits        — hit/miss ratio per chunk
-Cache behavior    — semantic-cache hit/miss, borderline similarity, stale-hit age
-Metadata filter   — candidates excluded before scoring, exclusion ratio
-Final prompt      — assembled prompt as-is
+Token usage         — per-section breakdown, headroom, model limit
+Duplicate chunks    — path dups, window dups, semantic dups
+Chunk scores        — retrieval + rerank score distribution
+Truncation          — which chunks were trimmed, at what score
+Score degeneracy    — chunk-score variance; near-zero means scores aren't discriminating
+Score margin        — top-vs-second chunk score gap; thin means the top pick isn't decisively best
+Dropped history     — what was evicted, why, what survived
+Cache hits          — hit/miss ratio per chunk
+Cache behavior      — semantic-cache hit/miss, borderline similarity, stale-hit age
+Metadata filter     — candidates excluded before scoring, exclusion ratio
+Candidate underfill — returned chunk count vs the requested top_k ask
+Final prompt        — assembled prompt as-is
 ```
 
-The example pipeline's `pattern_full_fields()` run (`examples/rag_pipeline/02_capture_patterns.py`,
-`ragradar explain s4r3 --full`) is designed to trigger nine of these ten
-factors visibly: low headroom (4.8%), window duplicates, one high-score
-truncation (rerank 0.88, truncated=True), two evicted history turns, one
-cache hit, two candidates excluded by a metadata filter (33% exclusion),
-plus chunk-score variance and chunk scores rendering alongside them
-(only "Cache behavior" is absent — this run never checks a semantic cache).
+Both `examples/rag_pipeline/02_capture_patterns.py`'s `pattern_full_fields()`
+run and `03_evaluate.py`'s `capture_demo_run()` are designed to trigger ten
+of these eleven factors visibly: low headroom (4.8%), window duplicates,
+one high-score truncation (rerank 0.88, truncated=True), two evicted
+history turns, one cache hit, two candidates excluded by a metadata
+filter (33% exclusion), a thin score margin (0.04, just under the 0.05
+policy default), plus chunk-score variance and chunk scores rendering
+alongside them. Candidate underfill fires on both too — flagged on 02's
+run (6 requested, 4 returned) and a clean exact match on 03's (4
+requested, 4 returned), deliberately contrasting the two. Because
+`03_evaluate.py` now captures the same breadth of fields as `02`'s demo
+(it used to be much thinner), following the Quick start commands above
+in order leaves the reader's actual latest run — `ragradar explain --full`,
+no target needed, currently `s4r4` — firing all ten directly rather than
+needing `s4r3` specifically. Only "Cache behavior" is absent from both:
+no example script calls `cap.semantic_cache()`.
 
 ---
 
@@ -301,7 +313,8 @@ ragradar-evaluate policy reset                    # restore defaults
 
 Every metric is selectable on its own via
 `ragradar.evaluate(run_id, metrics=[...])`; `metrics=None` runs
-everything applicable. Discover them with `ragradar.available_metrics()`.
+everything applicable. Discover them with `ragradar.available_metrics()`
+(fourteen today: ten input, four output).
 
 **Input metrics (free, deterministic, no LLM)**
 
@@ -311,7 +324,11 @@ duplicates            path + window + semantic duplicate detection
 truncation            were high-score chunks cut?
 token_efficiency      headroom, low-score chunk ratio
 coherence             source domain count, score variance
+cache_risk            borderline/stale semantic-cache hits
 filter_risk           candidate-exclusion ratio from metadata filtering
+score_degeneracy      chunk-score variance; near-zero means scores aren't discriminating
+score_margin          top-vs-second chunk score gap (plus a threshold-margin diagnostic)
+score_underfill       returned chunk count vs the requested top_k ask
 ```
 
 **Output metrics (RAGAS, LLM-as-judge — costs LLM calls)**
@@ -365,7 +382,7 @@ uv run ruff format packages examples
 uv run ruff check packages examples
 ```
 
-290 tests across four packages. All pass.
+413 tests across four packages. All pass.
 
 ---
 

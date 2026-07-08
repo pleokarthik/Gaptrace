@@ -1,5 +1,5 @@
 """
-ragradar-capture patterns beyond the quickstart. Each pattern_*() function is
+gaptrace-capture patterns beyond the quickstart. Each pattern_*() function is
 runnable independently (`python -c "import importlib; ..."` or via a
 REPL) or all together via __main__ below.
 
@@ -11,13 +11,13 @@ import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 
-import ragradar
+import gaptrace
 
 PIPELINE = "rag_example"
 
 
 def _sample_chunks():
-    """Four chunks engineered to trigger ragradar explain's window-dup, truncation, and low-score signals."""
+    """Four chunks engineered to trigger gaptrace explain's window-dup, truncation, and low-score signals."""
     return [
         {
             "chunk_id": "rrf_norm_1",
@@ -68,7 +68,7 @@ def _sample_chunks():
 
 def pattern_full_fields():
     """Populate every optional RunRecord field -- metadata filter, chunks, context, history, cache, tool calls, response -- in one staged capture."""
-    cap = ragradar.start(query="what is RRF and how does it normalize scores?", pipeline=PIPELINE)
+    cap = gaptrace.start(query="what is RRF and how does it normalize scores?", pipeline=PIPELINE)
 
     # Metadata filter runs before retrieval; excluded candidates never reach scoring.
     cap.metadata_filter(
@@ -80,7 +80,7 @@ def pattern_full_fields():
 
     chunks = _sample_chunks()
     # requested_count=6: the retriever asked for 6 candidates but only 4
-    # came back -- triggers ragradar explain's candidate-underfill signal.
+    # came back -- triggers gaptrace explain's candidate-underfill signal.
     cap.chunks(chunks, requested_count=6)
 
     prompt = (
@@ -133,14 +133,14 @@ def pattern_full_fields():
         model="gpt-4-turbo",
     )
     # cap.commit() already called by cap.response()
-    print(f"Captured {run_id} — try: ragradar explain {run_id}")
+    print(f"Captured {run_id} — try: gaptrace explain {run_id}")
 
 
 def _backdate_pipeline_runs(db_path: Path, pipeline: str, minutes: int) -> None:
     """test/demo-only: rewrites timestamps directly via raw SQL to simulate
-    an idle gap. NOT part of the public ragradar-capture API -- real pipelines
+    an idle gap. NOT part of the public gaptrace-capture API -- real pipelines
     never touch runs.db directly; session gaps happen naturally over
-    wall-clock time between calls to ragradar.start().
+    wall-clock time between calls to gaptrace.start().
     """
     with sqlite3.connect(str(db_path)) as conn:
         for table, key_cols in [("sessions", ["session_id"]), ("runs", ["session_id", "run_seq"])]:
@@ -156,25 +156,25 @@ def _backdate_pipeline_runs(db_path: Path, pipeline: str, minutes: int) -> None:
 
 
 def pattern_multi_session_gap():
-    """Capture two query groups 31 minutes apart to trigger ragradar-capture's auto session split."""
+    """Capture two query groups 31 minutes apart to trigger gaptrace-capture's auto session split."""
     for q in ["what is RRF?", "why does BM25 differ from vector similarity?"]:
-        cap = ragradar.start(query=q, pipeline=PIPELINE)
+        cap = gaptrace.start(query=q, pipeline=PIPELINE)
         cap.chunks(_sample_chunks())
         cap.response(f"Answer to: {q}")
 
-    db_path = Path.home() / ".ragradar" / "runs.db"
+    db_path = Path.home() / ".gaptrace" / "runs.db"
     _backdate_pipeline_runs(db_path, PIPELINE, minutes=31)
 
     for q in ["what does a cross-encoder compute?", "when should reranking be skipped?"]:
-        cap = ragradar.start(query=q, pipeline=PIPELINE)
+        cap = gaptrace.start(query=q, pipeline=PIPELINE)
         cap.chunks(_sample_chunks())
         cap.response(f"Answer to: {q}")
 
 
 def pattern_thread_local_proxy():
-    """Capture via module-level ragradar.chunks()/response() -- no capture object threaded through the call stack."""
-    ragradar.start(query="does rerank order affect final context assembly?", pipeline="proxy_demo")
-    ragradar.chunks(
+    """Capture via module-level gaptrace.chunks()/response() -- no capture object threaded through the call stack."""
+    gaptrace.start(query="does rerank order affect final context assembly?", pipeline="proxy_demo")
+    gaptrace.chunks(
         [
             {
                 "content": "Rerank order changes which chunks survive truncation.",
@@ -183,17 +183,17 @@ def pattern_thread_local_proxy():
             },
         ]
     )
-    run_id = ragradar.response(
+    run_id = gaptrace.response(
         "Yes -- rerank order determines what gets truncated when the budget is tight."
     )
-    print(f"Captured {run_id} — try: ragradar explain {run_id}")
+    print(f"Captured {run_id} — try: gaptrace explain {run_id}")
 
 
 if __name__ == "__main__":
     # pattern_full_fields() runs last so it ends up as the latest run --
-    # `ragradar explain` with no target shows the most recently captured run,
+    # `gaptrace explain` with no target shows the most recently captured run,
     # and this is the one that lights up every analysis factor.
     pattern_multi_session_gap()
     pattern_thread_local_proxy()
     pattern_full_fields()
-    print("Captured capture-pattern demo runs. Try: ragradar list")
+    print("Captured capture-pattern demo runs. Try: gaptrace list")

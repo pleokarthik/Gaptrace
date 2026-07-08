@@ -1,9 +1,9 @@
 [tool.uv.workspace]
 members = [
-    "packages/ragradar-core",
-    "packages/ragradar-capture",
-    "packages/ragradar",
-    "packages/ragradar-evaluate",
+    "packages/gaptrace-core",
+    "packages/gaptrace-capture",
+    "packages/gaptrace",
+    "packages/gaptrace-evaluate",
 ]
 
 [tool.uv]

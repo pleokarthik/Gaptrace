@@ -1,4 +1,4 @@
-# ragradar
+# gaptrace
 
 Local-first observability for RAG and agentic LLM pipelines.
 
@@ -8,7 +8,7 @@ budget — and still produce a plausible-looking response. There is no
 standard tool that surfaces what actually went into the context window
 and flags what went wrong.
 
-`ragradar` fills that gap.
+`gaptrace` fills that gap.
 
 ---
 
@@ -26,25 +26,25 @@ before the expensive call. None of them flag mechanical failures:
 duplicate chunks, high-score truncations, dropped history, token
 misallocation.
 
-`ragradar` is the observability layer that lives before the LLM call.
+`gaptrace` is the observability layer that lives before the LLM call.
 
 ---
 
 ## Install
 
 ```bash
-pip install ragradar
+pip install gaptrace
 ```
 
 ```python
-import ragradar
+import gaptrace
 ```
 
 That one import is the whole public surface — capturing runs,
-evaluating them, and checking their health all live on the `ragradar`
+evaluating them, and checking their health all live on the `gaptrace`
 module. Nothing else needs importing for everyday use.
 
-(`ragradar-core`, `ragradar-capture`, and `ragradar-evaluate` are
+(`gaptrace-core`, `gaptrace-capture`, and `gaptrace-evaluate` are
 separately installable too — see [Architecture](#architecture) for why
 you'd reach for those directly instead.)
 
@@ -62,40 +62,40 @@ python examples/rag_pipeline/02_capture_patterns.py
 python examples/rag_pipeline/03_evaluate.py
 
 # browse what was captured
-ragradar list
-ragradar list s4
+gaptrace list
+gaptrace list s4
 
 # inspect the latest run
-ragradar explain --full
+gaptrace explain --full
 
 # inspect a specific run
-ragradar explain s4r3
-ragradar explain s4r3 --full
-ragradar explain s4r3 --html        # snapshot to ~/.ragradar/reports/
+gaptrace explain s4r3
+gaptrace explain s4r3 --full
+gaptrace explain s4r3 --html        # snapshot to ~/.gaptrace/reports/
 
 # search runs by query text
-ragradar find "reranking"
-ragradar find "RRF" --session s4
+gaptrace find "reranking"
+gaptrace find "RRF" --session s4
 
 # compare two runs
-ragradar diff s4r1 s4r3
+gaptrace diff s4r1 s4r3
 
 # evaluate input quality — no LLM required
-ragradar-evaluate run --input-only
+gaptrace-evaluate run --input-only
 
 # see benchmark thresholds built from accumulated runs
-ragradar-evaluate benchmark show
+gaptrace-evaluate benchmark show
 
 # check a specific run against benchmark
-ragradar-evaluate benchmark check s4r3
+gaptrace-evaluate benchmark check s4r3
 
 # see active quality policy
-ragradar-evaluate policy show
+gaptrace-evaluate policy show
 ```
 
 ---
 
-## What ragradar explain shows
+## What gaptrace explain shows
 
 Eleven analysis factors, computed deterministically from captured data
 (plus the assembled prompt, rendered as-is rather than analyzed). Each
@@ -128,7 +128,7 @@ run (6 requested, 4 returned) and a clean exact match on 03's (4
 requested, 4 returned), deliberately contrasting the two. Because
 `03_evaluate.py` now captures the same breadth of fields as `02`'s demo
 (it used to be much thinner), following the Quick start commands above
-in order leaves the reader's actual latest run — `ragradar explain --full`,
+in order leaves the reader's actual latest run — `gaptrace explain --full`,
 no target needed, currently `s4r4` — firing all ten directly rather than
 needing `s4r3` specifically. Only "Cache behavior" is absent from both:
 no example script calls `cap.semantic_cache()`.
@@ -140,10 +140,10 @@ no example script calls `cap.semantic_cache()`.
 Minimum instrumentation — two fields, and you get the run's id back:
 
 ```python
-import ragradar
+import gaptrace
 
-run_id = ragradar.capture("what is RRF?", "RRF fuses rankings.")
-print(f"Captured {run_id} — try: ragradar explain {run_id}")
+run_id = gaptrace.capture("what is RRF?", "RRF fuses rankings.")
+print(f"Captured {run_id} — try: gaptrace explain {run_id}")
 ```
 
 Everything past `query`/`response` takes plain Python — dicts, tuples,
@@ -151,9 +151,9 @@ a bare int — never a schema type you have to import and construct.
 Full staged instrumentation, one call per pipeline stage:
 
 ```python
-import ragradar
+import gaptrace
 
-cap = ragradar.start(query="what is RRF?", pipeline="my_project")
+cap = gaptrace.start(query="what is RRF?", pipeline="my_project")
 
 cap.metadata_filter(                            # before retrieval — candidates
     applied=True,                               # excluded by a metadata filter
@@ -183,19 +183,19 @@ print(f"Captured {run_id}")
 
 Every field except `query` and `response` is optional. More
 instrumentation unlocks more analysis. Nothing breaks at any level —
-capture failures are logged to `~/.ragradar/errors.log`, never raised
-into your pipeline (flip that with `ragradar.set_strict(True)` in
+capture failures are logged to `~/.gaptrace/errors.log`, never raised
+into your pipeline (flip that with `gaptrace.set_strict(True)` in
 development).
 
 The schema dataclasses (`ChunkRecord`, `TokenBudget`, `Turn`, ...) still
-exist and are re-exported from `ragradar` for callers who want static
+exist and are re-exported from `gaptrace` for callers who want static
 typing or are round-tripping data already in that shape — pass one in
 anywhere a dict is shown above and it's used as-is.
 
 ```bash
 # greenfield — generates a scaffold with capture calls pre-positioned
-pip install ragradar-capture   # capture alone, no analyst/eval deps
-ragradar-capture init
+pip install gaptrace-capture   # capture alone, no analyst/eval deps
+gaptrace-capture init
 ```
 
 ---
@@ -204,34 +204,34 @@ ragradar-capture init
 
 ```
 your pipeline
-  └── ragradar_capture (ragradar-capture)  →  ~/.ragradar/runs.db
+  └── gaptrace_capture (gaptrace-capture)  →  ~/.gaptrace/runs.db
                                      ↑
-                    ragradar (analyst CLI) ┤
-                    ragradar-evaluate      ┘
+                    gaptrace (analyst CLI) ┤
+                    gaptrace-evaluate      ┘
                           ↑
-      all three depend on ragradar-core (schema + store + sNrN parser)
-             all three are re-exported as one `import ragradar`
+      all three depend on gaptrace-core (schema + store + sNrN parser)
+             all three are re-exported as one `import gaptrace`
 ```
 
-Four distributions, one public import. `ragradar-core`,
-`ragradar-capture`, and `ragradar-evaluate` stay separately installable
-because they have genuinely different footprints: `ragradar-capture` is
+Four distributions, one public import. `gaptrace-core`,
+`gaptrace-capture`, and `gaptrace-evaluate` stay separately installable
+because they have genuinely different footprints: `gaptrace-capture` is
 what runs *inside* your production pipeline and is deliberately
-stdlib-only (beyond `ragradar-core`) so it never introduces a dependency
-conflict there; `ragradar-evaluate` pulls `ragas` + `scipy` for scoring
+stdlib-only (beyond `gaptrace-core`) so it never introduces a dependency
+conflict there; `gaptrace-evaluate` pulls `ragas` + `scipy` for scoring
 and is not something a production hot path should have to import. The
-`ragradar` distribution depends on all three and re-exports their public
-functions from `ragradar/__init__.py`, so day-to-day use is just
-`import ragradar` — the split only matters if you're choosing what to
+`gaptrace` distribution depends on all three and re-exports their public
+functions from `gaptrace/__init__.py`, so day-to-day use is just
+`import gaptrace` — the split only matters if you're choosing what to
 install where.
 
 ```
-ragradar/
+gaptrace/
   packages/
-    ragradar-core/         # shared kernel — schema, SQLite store, zero deps
-    ragradar-capture/      # instrumentation SDK — stdlib only
-    ragradar/              # umbrella package (re-exports everything) + analyst CLI
-    ragradar-evaluate/     # evaluation layer — ragas, scipy, sentence-transformers
+    gaptrace-core/         # shared kernel — schema, SQLite store, zero deps
+    gaptrace-capture/      # instrumentation SDK — stdlib only
+    gaptrace/              # umbrella package (re-exports everything) + analyst CLI
+    gaptrace-evaluate/     # evaluation layer — ragas, scipy, sentence-transformers
   examples/
     rag_pipeline/     # end-to-end working examples
   docs/
@@ -242,69 +242,69 @@ ragradar/
 
 ## Tool reference
 
-### ragradar (analyst CLI)
+### gaptrace (analyst CLI)
 
 ```bash
-pip install ragradar
+pip install gaptrace
 
-ragradar list                          # list sessions
-ragradar list <session>                # list runs in session
-ragradar find <hint>                   # search by query text
-ragradar find <hint> --today           # with date filter
-ragradar find <hint> --pipeline <name> # with pipeline filter
-ragradar explain                       # latest run
-ragradar explain <target>              # e.g. s2r3
-ragradar explain <target> --full       # expanded
-ragradar explain <target> --html       # HTML snapshot
-ragradar diff <target> <target>        # compare two runs
-ragradar budget <target>               # token waterfall only
-ragradar session rename <id> <title>   # rename a session
+gaptrace list                          # list sessions
+gaptrace list <session>                # list runs in session
+gaptrace find <hint>                   # search by query text
+gaptrace find <hint> --today           # with date filter
+gaptrace find <hint> --pipeline <name> # with pipeline filter
+gaptrace explain                       # latest run
+gaptrace explain <target>              # e.g. s2r3
+gaptrace explain <target> --full       # expanded
+gaptrace explain <target> --html       # HTML snapshot
+gaptrace diff <target> <target>        # compare two runs
+gaptrace budget <target>               # token waterfall only
+gaptrace session rename <id> <title>   # rename a session
 ```
 
 Optional semantic search:
 
 ```bash
-pip install ragradar[semantic]         # enables embedding-based search
+pip install gaptrace[semantic]         # enables embedding-based search
 ```
 
-### ragradar.check() / ragradar.evaluate()
+### gaptrace.check() / gaptrace.evaluate()
 
-Python API — two tasks, both reachable through the one `ragradar` import:
+Python API — two tasks, both reachable through the one `gaptrace` import:
 
 ```python
-import ragradar
+import gaptrace
 
-run_id = ragradar.capture(
+run_id = gaptrace.capture(
     "what is RRF?", "RRF fuses rankings.",
     chunks=[{"content": "RRF combines rankings.", "rerank_score": 0.9}],
 )
 
 # Is this run healthy? Free, deterministic, instant.
-result = ragradar.check(run_id)
+result = gaptrace.check(run_id)
 print(result.verdict, result.problems, result.thresholds)
 
 # Score it fully — or pick exactly the metrics you want.
-full = ragradar.evaluate(run_id)                                    # everything applicable
-one = ragradar.evaluate(run_id, metrics=["duplicates"], save=False) # only this metric
+full = gaptrace.evaluate(run_id)                                    # everything applicable
+one = gaptrace.evaluate(run_id, metrics=["duplicates"], save=False) # only this metric
 print(one.metrics["duplicates"]["duplicate_ratio"])
 ```
 
-CLI (the underlying `ragradar-evaluate` distribution's entry point):
+CLI (the underlying `gaptrace-evaluate` distribution's entry point):
 
 ```bash
-ragradar-evaluate run <target>                    # both layers
-ragradar-evaluate run <target> --input-only       # no LLM required
-ragradar-evaluate run <target> --output-only      # RAGAS only
-ragradar-evaluate run --session <id>              # all runs in session
+gaptrace-evaluate run <target>                    # both layers
+gaptrace-evaluate run <target> --input-only       # no LLM required
+gaptrace-evaluate run <target> --output-only      # RAGAS only
+gaptrace-evaluate run --session <id>              # all runs in session
 
-ragradar-evaluate benchmark show                  # learned per-factor thresholds
-ragradar-evaluate benchmark build                 # rebuild from 10+ evaluated runs
-ragradar-evaluate benchmark check <target>        # ok / warn / fail per factor
-ragradar-evaluate benchmark export                # RAGAS-compatible JSONL
+gaptrace-evaluate benchmark show                  # learned per-factor thresholds
+gaptrace-evaluate benchmark build                 # rebuild from 10+ evaluated runs
+gaptrace-evaluate benchmark check <target>        # ok / warn / fail per factor
+gaptrace-evaluate benchmark export                # RAGAS-compatible JSONL
 
-ragradar-evaluate policy show                     # active thresholds
-ragradar-evaluate policy set <field> <value>      # override a threshold
-ragradar-evaluate policy reset                    # restore defaults
+gaptrace-evaluate policy show                     # active thresholds
+gaptrace-evaluate policy set <field> <value>      # override a threshold
+gaptrace-evaluate policy reset                    # restore defaults
 ```
 
 ---
@@ -312,8 +312,8 @@ ragradar-evaluate policy reset                    # restore defaults
 ## Evaluation metrics — atomic, individually selectable
 
 Every metric is selectable on its own via
-`ragradar.evaluate(run_id, metrics=[...])`; `metrics=None` runs
-everything applicable. Discover them with `ragradar.available_metrics()`
+`gaptrace.evaluate(run_id, metrics=[...])`; `metrics=None` runs
+everything applicable. Discover them with `gaptrace.available_metrics()`
 (fourteen today: ten input, four output).
 
 **Input metrics (free, deterministic, no LLM)**
@@ -342,7 +342,7 @@ context_recall        was the necessary information present? (needs ground_truth
 
 **Current standards**
 
-`ragradar.check()` compares runs against learned thresholds once 10+
+`gaptrace.check()` compares runs against learned thresholds once 10+
 evaluated runs exist for the pipeline (built automatically from your own
 history), falling back to policy defaults before that —
 `CheckResult.thresholds` says which was used. The system becomes
@@ -353,9 +353,9 @@ pipeline-specific over time — your data, your thresholds.
 ## Roadmap
 
 ```
-v0.1.0   ragradar-capture + ragradar         ✓ shipped
-v0.2.0   ragradar-evaluate + examples        ✓ shipped
-v0.3.0   ragradar-improve (input quality     — planned
+v0.1.0   gaptrace-capture + gaptrace         ✓ shipped
+v0.2.0   gaptrace-evaluate + examples        ✓ shipped
+v0.3.0   gaptrace-improve (input quality     — planned
          improvement before LLM call)
 ```
 
@@ -365,17 +365,17 @@ v0.3.0   ragradar-improve (input quality     — planned
 
 ```bash
 git clone <repo>
-cd ragradar
+cd gaptrace
 uv sync
 
 # run all tests
 uv run pytest
 
 # run per package
-uv run pytest packages/ragradar-core/tests/
-uv run pytest packages/ragradar-capture/tests/
-uv run pytest packages/ragradar/tests/
-uv run pytest packages/ragradar-evaluate/tests/
+uv run pytest packages/gaptrace-core/tests/
+uv run pytest packages/gaptrace-capture/tests/
+uv run pytest packages/gaptrace/tests/
+uv run pytest packages/gaptrace-evaluate/tests/
 
 # format + lint
 uv run ruff format packages examples
@@ -386,9 +386,9 @@ uv run ruff check packages examples
 
 ---
 
-## Why ragradar
+## Why gaptrace
 
-| | ragradar | LangSmith | RAGAS | Print debugging |
+| | gaptrace | LangSmith | RAGAS | Print debugging |
 |---|---|---|---|---|
 | Pre-call inspection | ✓ | ✗ | ✗ | manual |
 | Local / offline | ✓ | ✗ | partial | ✓ |
@@ -398,6 +398,6 @@ uv run ruff check packages examples
 | Benchmark over time | ✓ | ✓ | ✗ | ✗ |
 | No LLM for navigation | ✓ | ✓ | ✗ | ✓ |
 
-ragradar is not a replacement for LangSmith or RAGAS. It occupies the
+gaptrace is not a replacement for LangSmith or RAGAS. It occupies the
 pre-call mechanical observability position that neither covers.
-The three tools compose: ragradar captures, RAGAS scores, LangSmith traces.
+The three tools compose: gaptrace captures, RAGAS scores, LangSmith traces.

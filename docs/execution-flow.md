@@ -1,4 +1,4 @@
-# ragradar — Execution Flow (method-by-method)
+# gaptrace — Execution Flow (method-by-method)
 
 > **Snapshot, not a pinned reference.** This traces the source tree as read
 > on the date this file was written. Method bodies get refactored and line
@@ -8,26 +8,26 @@
 > data model, architecture) and `scope.md` (delivery scope) — this
 > one is pure call-flow.
 
-Four distributions share one SQLite file at `~/.ragradar/runs.db`:
+Four distributions share one SQLite file at `~/.gaptrace/runs.db`:
 
 ```
-ragradar-core     (import ragradar_core)     → schema + store + sNrN parser + coercion (zero deps)
-ragradar-capture  (import ragradar_capture)  → writes runs.db (stdlib-only beyond ragradar_core)
-ragradar          (import ragradar)          → reads runs.db, renders analysis; ALSO re-exports
-                                                 ragradar_capture's and ragradar_evaluate's public
-                                                 functions, so `import ragradar` alone is the
-                                                 complete public surface (packages/ragradar/src/
-                                                 ragradar/__init__.py:1-82)
-ragradar-evaluate (import ragradar_evaluate) → reads + augments runs.db with eval columns
+gaptrace-core     (import gaptrace_core)     → schema + store + sNrN parser + coercion (zero deps)
+gaptrace-capture  (import gaptrace_capture)  → writes runs.db (stdlib-only beyond gaptrace_core)
+gaptrace          (import gaptrace)          → reads runs.db, renders analysis; ALSO re-exports
+                                                 gaptrace_capture's and gaptrace_evaluate's public
+                                                 functions, so `import gaptrace` alone is the
+                                                 complete public surface (packages/gaptrace/src/
+                                                 gaptrace/__init__.py:1-82)
+gaptrace-evaluate (import gaptrace_evaluate) → reads + augments runs.db with eval columns
 ```
 
-No package's **CLI** imports another's CLI. But the `ragradar` distribution's
-`__init__.py` does import `ragradar_capture` and `ragradar_evaluate` as
-*libraries* to re-export their functions — `ragradar.start`, `ragradar.capture`,
-`ragradar.check`, `ragradar.evaluate`, `ragradar.available_metrics`, the schema
+No package's **CLI** imports another's CLI. But the `gaptrace` distribution's
+`__init__.py` does import `gaptrace_capture` and `gaptrace_evaluate` as
+*libraries* to re-export their functions — `gaptrace.start`, `gaptrace.capture`,
+`gaptrace.check`, `gaptrace.evaluate`, `gaptrace.available_metrics`, the schema
 dataclasses, etc. are all the same objects those packages define, just
 reachable through one import. All four packages ultimately depend on
-`ragradar_core` for the `RunRecord` dataclasses, the store, the `sNrN` parser
+`gaptrace_core` for the `RunRecord` dataclasses, the store, the `sNrN` parser
 (`targets.py`), and the primitive-to-dataclass coercion helpers (`coerce.py`)
 — that kernel is the real coupling point.
 
@@ -36,7 +36,7 @@ reachable through one import. All four packages ultimately depend on
 ## 1. Data model (recap)
 
 Everything funnels into one dataclass, `RunRecord`
-(`packages/ragradar-core/src/ragradar_core/schema.py:171`):
+(`packages/gaptrace-core/src/gaptrace_core/schema.py:171`):
 
 ```
 RunRecord
@@ -60,7 +60,7 @@ RunRecord
 
 `cache` and `filter` (`schema.py:132` and `schema.py:153`) are the newest
 fields — added for the semantic-cache and metadata-filter features, after
-`ToolCallRecord` (`schema.py:116`). Every one of the nine `ragradar.explain`
+`ToolCallRecord` (`schema.py:116`). Every one of the nine `gaptrace.explain`
 analyzers has now been checked: `cache` is rendered by
 `explain/analyzers/semantic_cache.py` and `filter` by
 `explain/analyzers/metadata_filter.py`, but `tool_calls` still isn't
@@ -78,8 +78,8 @@ than raising `TypeError`.
 dataclass list (including `tool_calls` → `ToolCallRecord`) because
 `asdict`/plain `dict` round-tripping loses the class information.
 
-`ragradar_core/coerce.py` is the shared primitive-input boundary both
-`ragradar_capture` and `ragradar_evaluate` route user input through: bare
+`gaptrace_core/coerce.py` is the shared primitive-input boundary both
+`gaptrace_capture` and `gaptrace_evaluate` route user input through: bare
 dicts, `("role", "content")` tuples, a bare-int token budget, a
 `{chunk_id: hit}` cache mapping, all coerce into the dataclasses above.
 Token counts default to a deterministic ~4-chars-per-token estimate
@@ -92,14 +92,14 @@ coercer (`coerce_chunk`/`coerce_chunks` at `coerce.py:88`/`109`,
 `coerce.py:212`) passes dataclass instances through untouched and only
 converts primitives. `coerce_run_record` (`coerce.py:221`) coerces every
 nested field of a whole hand-built `RunRecord` at once — this is what lets
-`ragradar_evaluate.evaluate()`/`check()` accept a bare `RunRecord` built with
+`gaptrace_evaluate.evaluate()`/`check()` accept a bare `RunRecord` built with
 plain dicts, not just an `sNrN` id.
 
 ---
 
-## 2. ragradar-capture — instrumentation SDK (`import ragradar_capture`)
+## 2. gaptrace-capture — instrumentation SDK (`import gaptrace_capture`)
 
-### 2.1 One-liner path: `ragradar_capture.capture(query, response, **explicit kwargs)`
+### 2.1 One-liner path: `gaptrace_capture.capture(query, response, **explicit kwargs)`
 
 `api.py:284`
 
@@ -119,23 +119,23 @@ at the call site rather than being silently swallowed.
    `token_budget` is persisted whether or not `final_prompt` is given.
 4. Call `cap.commit()`.
 5. The **entire body is wrapped in `try/except Exception`** (`api.py:316`-`341`)
-   — any internal failure is swallowed and logged to `~/.ragradar/errors.log`
+   — any internal failure is swallowed and logged to `~/.gaptrace/errors.log`
    via `_handle_error()`/`_get_logger()` (`api.py:61`, `api.py:44`), never
    raised to the caller's pipeline — unless strict mode is on (§2.2).
 
 ### 2.2 Strict mode
 
-`set_strict(True)` (`api.py:27`) or the `RAGRADAR_CAPTURE_STRICT=1`
+`set_strict(True)` (`api.py:27`) or the `GAPTRACE_CAPTURE_STRICT=1`
 environment variable (checked by `_strict_enabled()`, `api.py:40`) flips
 every capture method from "log and swallow" to "re-raise" — meant for
 development, to surface instrumentation bugs instead of hiding them in
 `errors.log`. The default (`False`) keeps the fail-open production
 contract.
 
-### 2.3 Staged path: `ragradar_capture.start()` → `cap.X()` → auto-commit
+### 2.3 Staged path: `gaptrace_capture.start()` → `cap.X()` → auto-commit
 
 ```
-cap = ragradar_capture.start(query=query, pipeline="my_project")   # api.py:272
+cap = gaptrace_capture.start(query=query, pipeline="my_project")   # api.py:272
   └── Capture(query, pipeline)                            # api.py:71, __init__ at api.py:80
   └── set_active_capture(cap)                              # thread_local.py:6
 cap.chunks(chunks)          # api.py:92   → coerces each item to ChunkRecord
@@ -151,7 +151,7 @@ cap.metadata_filter(...)    # api.py:207  → sets the FilterRecord
 ```
 
 Each method:
-- coerces raw dicts to the matching dataclass via `ragradar_core.coerce`
+- coerces raw dicts to the matching dataclass via `gaptrace_core.coerce`
   (only if not already a dataclass instance),
 - is wrapped in its own `try/except`, logging and swallowing failures
   independently (unless strict mode is on) — a broken `cap.chunks()` call
@@ -162,7 +162,7 @@ Each method:
 1. No-ops (returns the existing id) if `self._run_id is not None` — a
    second `cap.commit()` call (or the auto-commit inside `response()` plus
    a later manual call) is a silent no-op, not a second write.
-2. `ragradar_core.store.commit_run(pipeline, record)` — resolves/creates
+2. `gaptrace_core.store.commit_run(pipeline, record)` — resolves/creates
    the session, assigns the next `run_seq`, and inserts the run row all
    inside one `BEGIN IMMEDIATE` transaction (`store.py:430`). This replaced
    an earlier three-separate-connection sequence (`get_or_create_session()`
@@ -171,12 +171,12 @@ Each method:
    race-free consolidation.
 3. Sets `self._run_id = f"s{session_id}r{run_seq}"` and returns it (or
    `None` if the write failed in non-strict mode, logged to
-   `~/.ragradar/errors.log`). `cap.run_id` (`api.py:87`, a property) reads the
+   `~/.gaptrace/errors.log`). `cap.run_id` (`api.py:87`, a property) reads the
    same value without re-committing.
 
 ### 2.4 Thread-local proxy functions
 
-`ragradar_capture.chunks()`, `.context()`, `.history()`, `.response()`,
+`gaptrace_capture.chunks()`, `.context()`, `.history()`, `.response()`,
 `.cache()`, `.semantic_cache()`, `.metadata_filter()`, `.tool_call()`,
 `.commit()` (module-level functions, `api.py:350` onward) are free
 functions that:
@@ -186,13 +186,13 @@ functions that:
 3. Otherwise delegate to the corresponding `Capture` method.
 
 This lets code deep in a call stack (e.g. a reranker module) call
-`ragradar_capture.cache(events)` without threading a `Capture` object
+`gaptrace_capture.cache(events)` without threading a `Capture` object
 through every function signature, as long as it executes on the same
-thread that called `ragradar_capture.start()`.
+thread that called `gaptrace_capture.start()`.
 
-### 2.5 Session auto-creation — `ragradar_core.store.get_or_create_session()`
+### 2.5 Session auto-creation — `gaptrace_core.store.get_or_create_session()`
 
-`packages/ragradar-core/src/ragradar_core/store.py:347`
+`packages/gaptrace-core/src/gaptrace_core/store.py:347`
 
 `Capture.commit()` (§2.3) no longer calls this public function directly —
 it calls `commit_run()`, which runs an equivalent private
@@ -202,7 +202,7 @@ used directly by `benchmark/seeder.py` for synthetic run generation
 (§4.8), so the algorithm it implements is still worth tracing here.
 
 1. `connect()` (`store.py:268`) is called implicitly on every store access
-   — it creates `~/.ragradar/` and `runs.db` if missing and brings the schema
+   — it creates `~/.gaptrace/` and `runs.db` if missing and brings the schema
    to `SCHEMA_VERSION` (`"3"`, `store.py:26`) via `_ensure_schema()`
    (`store.py:151`) before any query runs. See §6 for what this means for
    fresh vs. pre-existing databases.
@@ -217,7 +217,7 @@ used directly by `benchmark/seeder.py` for synthetic run generation
 This is the mechanism `examples/rag_pipeline/02_capture_patterns.py`'s
 `pattern_multi_session_gap()` exploits deliberately — see §5.2.
 
-### 2.6 Scaffold generator — `ragradar-capture init`
+### 2.6 Scaffold generator — `gaptrace-capture init`
 
 `scaffold/cli.py:6` → `scaffold/template.py:41`
 1. `generate_scaffold()` refuses to overwrite an existing file, and that
@@ -227,21 +227,21 @@ This is the mechanism `examples/rag_pipeline/02_capture_patterns.py`'s
    project's old `ctx` name. It raises `FileExistsError` if the file is
    already there.
 2. Otherwise writes the hardcoded `TEMPLATE` string (`template.py:3`-`38`)
-   — a function skeleton with `ragradar_capture.start()` / `cap.chunks()` /
+   — a function skeleton with `gaptrace_capture.start()` / `cap.chunks()` /
    `cap.context()` / `cap.history()` / `cap.response()` calls
    pre-positioned as comments for the user to uncomment and fill in.
 
 ---
 
-## 3. ragradar — analyst CLI (and umbrella import)
+## 3. gaptrace — analyst CLI (and umbrella import)
 
-Entry point: `ragradar.cli:main`, a `click.Group` (`cli.py:68`). Its body is
+Entry point: `gaptrace.cli:main`, a `click.Group` (`cli.py:68`). Its body is
 just a docstring — **no schema-version check runs here**. There is no
-`ragradar.store.check_schema_version()` (or any equivalent) anywhere in the
+`gaptrace.store.check_schema_version()` (or any equivalent) anywhere in the
 current source; every subcommand's first store access goes through
-`ragradar_core.store.connect()`, which unconditionally brings the database
+`gaptrace_core.store.connect()`, which unconditionally brings the database
 to the latest schema (creating it from scratch if it doesn't exist) as a
-side effect of opening it. There is nothing left for `ragradar`'s CLI
+side effect of opening it. There is nothing left for `gaptrace`'s CLI
 group callback to check or warn about.
 
 ### 3.1 Target resolution — the shared primitive
@@ -249,11 +249,11 @@ group callback to check or warn about.
 Almost every command resolves a "target" string to a run row. Two
 resolvers exist:
 
-**`ragradar.store.resolve_target(target)`** (`store.py:89`) — used by
+**`gaptrace.store.resolve_target(target)`** (`store.py:89`) — used by
 `explain`, `budget` (and, less strictly, `diff`, §3.7):
 ```
-target is None          → get_latest_run()  (MAX created_at across all runs, ragradar_core.store.py:397)
-target matches s(\d+)r(\d+)  → parse_target_id() (ragradar_core/targets.py:8) then get_run(...)  (exact lookup)
+target is None          → get_latest_run()  (MAX created_at across all runs, gaptrace_core.store.py:397)
+target matches s(\d+)r(\d+)  → parse_target_id() (gaptrace_core/targets.py:8) then get_run(...)  (exact lookup)
 else                     → search_runs(hint=target)
                              0 results → None
                              1 result  → get_run(...) for it
@@ -270,7 +270,7 @@ which prints a numbered table and prompts interactively via
 Once a single row is settled, `loader.load_run_record(run_row)`
 (`explain/loader.py:6`) does `RunRecord.from_json(json.loads(row["run_data"]))`.
 
-### 3.2 `ragradar list [session_id]`
+### 3.2 `gaptrace list [session_id]`
 
 `cli.py:73`
 - No arg → `store.list_sessions()` (`store.py:16`): `LEFT JOIN`
@@ -279,18 +279,18 @@ Once a single row is settled, `loader.load_run_record(run_row)`
 - With `sN` or a bare int → `store.list_runs(sid)` (`store.py:38`): all
   runs in that session, newest first.
 
-### 3.3 `ragradar find <hint> [--exact] [--from] [--to] [--today] [--session] [--pipeline] [--recent N]`
+### 3.3 `gaptrace find <hint> [--exact] [--from] [--to] [--today] [--session] [--pipeline] [--recent N]`
 
 `cli.py:125` → `store.search_runs(...)` (`store.py:55`) →
 `find/query_builder.build_search_query()` (`query_builder.py:1`)
 
-`ragradar.store.search_runs()` calls `build_search_query(..., fts5_available=True)`
+`gaptrace.store.search_runs()` calls `build_search_query(..., fts5_available=True)`
 **unconditionally** (`store.py:82`) — it does not probe the database first.
-This is safe because `ragradar_core.store.connect()` guarantees any
+This is safe because `gaptrace_core.store.connect()` guarantees any
 database it opens is at the latest schema, which ships the `runs_fts`
 FTS5 virtual table and its sync triggers baked directly into the `SCHEMA`
-DDL (`ragradar_core/store.py:82`-`103`). Practically: **FTS5 is always
-available** to `ragradar find` today. `build_search_query()` still accepts
+DDL (`gaptrace_core/store.py:82`-`103`). Practically: **FTS5 is always
+available** to `gaptrace find` today. `build_search_query()` still accepts
 `fts5_available=False` and implements the plain-`LIKE` fallback
 (`query_builder.py:30`-`38`), but nothing in the current CLI path ever
 calls it that way — that branch is exercised only by unit tests that call
@@ -309,7 +309,7 @@ the function directly, not by any live command.
 Results render as a table; no disambiguation step (this command *shows*
 multiple matches by design, unlike `resolve_target`).
 
-### 3.4 `ragradar explain [target] [--full] [--html]`
+### 3.4 `gaptrace explain [target] [--full] [--html]`
 
 `cli.py:167`/`171`
 1. `_resolve_and_load(target)` → `(run_row, record)`.
@@ -335,21 +335,21 @@ multiple matches by design, unlike `resolve_target`).
    and print `_render_metadata_filter` if not `None` — also outside the
    loop, printed right after semantic cache to keep the two special-cased
    blocks together and preserve README's stated factor order.
-5. If `run_row` has `eval_scores` (populated by `ragradar-evaluate run`),
+5. If `run_row` has `eval_scores` (populated by `gaptrace-evaluate run`),
    render an extra "Evaluation Scores" panel (`_render_eval_scores`,
    `terminal.py:244`) — risk score, input-quality violations, RAGAS
    metrics if present.
 6. Print the final assembled prompt (truncated to 500 chars unless
    `--full`).
 
-Each analyzer module in `ragradar/explain/analyzers/` is a pure function
+Each analyzer module in `gaptrace/explain/analyzers/` is a pure function
 `analyze(record) -> dict | None` (nine modules total):
 
 | Module | Returns `None` when | Computes |
 |---|---|---|
 | `tokens.py` (`analyze` at `tokens.py:4`) | no chunks AND no final_prompt | sum of chunk token_counts + history_post tokens + system_allocated; utilisation % against `token_budget.total_limit`; per-chunk token breakdown |
 | `scores.py` (`scores.py:4`) | no chunks (or chunks have neither retrieval nor rerank scores) | min/max retrieval & rerank scores; `rerank_delta` = mean(rerank) − mean(retrieval); `low_score_ratio` = fraction of rerank scores < 0.5 |
-| `duplicates.py` (`duplicates.py:4`) | no chunks | **path dups**: same `chunk_id` seen via >1 distinct `retrieval_path`; **window dups**: chunks sharing `source_doc_id` where one's `content` is a substring of another's (pairwise, substring-only); `duplicate_ratio` = count of **distinct chunk_ids** implicated in any dup / total chunks; `semantic_dups` always `[]` (deferred — no embedding model in the free `ragradar` package) |
+| `duplicates.py` (`duplicates.py:4`) | no chunks | **path dups**: same `chunk_id` seen via >1 distinct `retrieval_path`; **window dups**: chunks sharing `source_doc_id` where one's `content` is a substring of another's (pairwise, substring-only); `duplicate_ratio` = count of **distinct chunk_ids** implicated in any dup / total chunks; `semantic_dups` always `[]` (deferred — no embedding model in the free `gaptrace` package) |
 | `truncation.py` (`truncation.py:4`) | no chunks | chunks with `truncated=True`; `severity`: `"none"` if none truncated, `"high"` if any truncated chunk has `retrieval_score>0.7` or `rerank_score>0.7`, else `"low"` |
 | `history.py` (`history.py:4`) | no history_pre AND no history_post | `dropped` = turns present in `pre` but whose `(role, content)` tuple is absent from `post`'s set; sums pre/post tokens |
 | `cache.py` (`cache.py:4`) | no `cache_events` | hit/miss counts, `hit_ratio`, lists of hit/miss chunk_ids |
@@ -368,9 +368,9 @@ at `terminal.py:148`, `_render_semantic_cache` at `terminal.py:163`,
 `terminal.py:220`) and, when `--full`, appends per-item detail lines.
 
 `render_budget()` (`terminal.py:332`) is just `tokens_mod.analyze()` +
-`_render_tokens(..., full=True)` — used by `ragradar budget <target>`.
+`_render_tokens(..., full=True)` — used by `gaptrace budget <target>`.
 
-`render_diff()` (`terminal.py:341`) — used by `ragradar diff`:
+`render_diff()` (`terminal.py:341`) — used by `gaptrace diff`:
 - Query side-by-side table.
 - Chunk set difference (`chunks_b - chunks_a` = added, vice versa =
   removed) plus counts.
@@ -390,12 +390,12 @@ at `terminal.py:148`, `_render_semantic_cache` at `terminal.py:163`,
 `render(record, run_id)` (`html.py:39`) mirrors the terminal renderer's
 analyzer loop but emits `<details><summary>...<pre>...</pre></details>`
 blocks instead of Rich panels, string-escaping all content (`_esc`,
-`html.py:26`). Writes to `~/.ragradar/reports/<run_id>.html` (creating the
-`reports/` dir via `ragradar_core.store._ragradar_dir()`) and returns the
+`html.py:26`). Writes to `~/.gaptrace/reports/<run_id>.html` (creating the
+`reports/` dir via `gaptrace_core.store._gaptrace_dir()`) and returns the
 `Path`. No eval-scores section here (the HTML report is generated from
 `record` alone, not `run_row`).
 
-### 3.7 `ragradar diff <target_a> <target_b>`
+### 3.7 `gaptrace diff <target_a> <target_b>`
 
 `cli.py:185`/`188` — both targets resolved via `store.resolve_target`
 directly (not `_resolve_and_load`, so **no interactive disambiguation**:
@@ -403,53 +403,53 @@ if either resolves to a list, the command just prints "Ambiguous target —
 use exact run ID" and exits). Otherwise loads both records and calls
 `terminal_renderer.render_diff`.
 
-### 3.8 `ragradar budget <target>`
+### 3.8 `gaptrace budget <target>`
 
 `cli.py:209`/`211` — `_resolve_and_load` then `terminal_renderer.render_budget`.
 
-### 3.9 `ragradar session rename <id> <title>`
+### 3.9 `gaptrace session rename <id> <title>`
 
 `cli.py:224`-`227` → `store.rename_session()` (`store.py:118`) — a plain
 `UPDATE sessions SET title = ? WHERE session_id = ?`. This is the only
-write `ragradar`'s CLI performs against run data (opening the store to
+write `gaptrace`'s CLI performs against run data (opening the store to
 create/migrate `runs.db` is environment setup, not a "write" in this
 sense).
 
-### 3.10 The umbrella re-export (`import ragradar`)
+### 3.10 The umbrella re-export (`import gaptrace`)
 
-`packages/ragradar/src/ragradar/__init__.py:1`-`82` imports and re-exports,
-in one place: every `ragradar_capture` entry point (`Capture`, `start`,
+`packages/gaptrace/src/gaptrace/__init__.py:1`-`82` imports and re-exports,
+in one place: every `gaptrace_capture` entry point (`Capture`, `start`,
 `capture`, `set_strict`, `chunks`, `context`, `history`, `response`,
 `cache`, `semantic_cache`, `metadata_filter`, `tool_call`, `commit`),
-every `ragradar_evaluate` entry point (`check`, `evaluate`,
+every `gaptrace_evaluate` entry point (`check`, `evaluate`,
 `available_metrics`, `CheckResult`, `EvalResult`, `MetricInfo`,
-`InputQualityPolicy`), and the `ragradar_core` schema dataclasses
+`InputQualityPolicy`), and the `gaptrace_core` schema dataclasses
 (`ChunkRecord`, `TokenBudget`, `TokenUsage`, `Turn`, `CacheEvent`,
 `CacheRecord`, `ToolCallRecord`, `RunRecord`, `FilterRecord`). All three
 example scripts
-(§5) use only `import ragradar` — never `ragradar_capture`/
-`ragradar_evaluate` directly — which is the intended day-to-day usage: a
+(§5) use only `import gaptrace` — never `gaptrace_capture`/
+`gaptrace_evaluate` directly — which is the intended day-to-day usage: a
 production pipeline that wants only the capture side without pulling in
-`ragas`/`scipy` installs `ragradar-capture` alone and imports
-`ragradar_capture` directly instead.
+`ragas`/`scipy` installs `gaptrace-capture` alone and imports
+`gaptrace_capture` directly instead.
 
 ---
 
-## 4. ragradar-evaluate — evaluation layer (`ragradar_evaluate`)
+## 4. gaptrace-evaluate — evaluation layer (`gaptrace_evaluate`)
 
-Entry point: `ragradar_evaluate.cli:main` (`cli.py:118`). Its group
+Entry point: `gaptrace_evaluate.cli:main` (`cli.py:118`). Its group
 callback calls `store.ensure_store()` (`cli.py:121`, which is
-`ragradar_core.store.ensure_store()` at `ragradar_core/store.py:295` —
+`gaptrace_core.store.ensure_store()` at `gaptrace_core/store.py:295` —
 open a connection, which self-migrates, then close it) on every
-invocation. There is no `ragradar_evaluate.store` module and no
+invocation. There is no `gaptrace_evaluate.store` module and no
 `apply_migration()` function anymore — both the connection/schema logic
-and the full migration chain live in `ragradar_core.store` and run
-automatically inside `connect()` (`ragradar_core/store.py:268`) for
-**every** package's every store access, not just `ragradar-evaluate`'s.
+and the full migration chain live in `gaptrace_core.store` and run
+automatically inside `connect()` (`gaptrace_core/store.py:268`) for
+**every** package's every store access, not just `gaptrace-evaluate`'s.
 
-### 4.1 Migration chain — `ragradar_core.store._ensure_schema()`
+### 4.1 Migration chain — `gaptrace_core.store._ensure_schema()`
 
-`packages/ragradar-core/src/ragradar_core/store.py:151`
+`packages/gaptrace-core/src/gaptrace_core/store.py:151`
 
 ```
 no 'meta' table (brand-new db) → executescript(SCHEMA) in one shot: the
@@ -475,22 +475,22 @@ anything else → raise RuntimeError("Unsupported schema version")
 
 Each step commits before falling through to the next, so a pre-existing
 v1 DB walks v1→v2→v3 in one `connect()` call. Because this logic is now
-centralized in `ragradar_core` and invoked by every package equally, there
-is no cross-package "installing ragradar-evaluate is what unlocks FTS5"
+centralized in `gaptrace_core` and invoked by every package equally, there
+is no cross-package "installing gaptrace-evaluate is what unlocks FTS5"
 coupling for anything created under the current codebase — that coupling
 only ever applies to a `runs.db` file inherited from an older release
 that already has `meta.schema_version` stamped `"1"` or `"2"`, and even
 then, the very next `connect()` call from *any* of the four packages
 (capture, analyst CLI, evaluate) walks it straight to `"3"`.
 
-### 4.2 `ragradar-evaluate run [target] [--input-only] [--output-only] [--session] [--ground-truth] [--pipeline]`
+### 4.2 `gaptrace-evaluate run [target] [--input-only] [--output-only] [--session] [--ground-truth] [--pipeline]`
 
 `cli.py:124`/`131`
 
 Both flags together (`--input-only --output-only`) is a clean error
 (`cli.py:133`-`138`, exit 1).
 
-Two paths, both routed through the public `ragradar_evaluate.evaluate()`
+Two paths, both routed through the public `gaptrace_evaluate.evaluate()`
 facade (`facade.py:298`) — the CLI has no scoring logic of its own beyond
 flag-to-metric-list mapping (`_metrics_for_flags`, `cli.py:38`):
 
@@ -517,7 +517,7 @@ then writes **all** results in one transaction via
 
 ### 4.3 The `evaluate()`/`check()` facade — `facade.py`
 
-`packages/ragradar-evaluate/src/ragradar_evaluate/facade.py` is the entire
+`packages/gaptrace-evaluate/src/gaptrace_evaluate/facade.py` is the entire
 public task-level API: `check()` (`facade.py:476`), `evaluate()`
 (`facade.py:343`), `available_metrics()` (`facade.py:216`). Everything
 else in the package (layers, policy, benchmark) is implementation detail
@@ -541,11 +541,11 @@ these two are not skipped for a chunk-less cache-hit run.
 `available_metrics()` returns a fresh copy of the whole dict.
 
 **`_resolve_target(target)`** (`facade.py:301`) accepts, in order: a bare
-`RunRecord` (coerced via `ragradar_core.coerce.coerce_run_record`, pipeline
+`RunRecord` (coerced via `gaptrace_core.coerce.coerce_run_record`, pipeline
 key `"__default"`, no run identity — `facade.py:314`); anything with a
-`.run_id` attribute (e.g. a `ragradar_capture.Capture` — raises
+`.run_id` attribute (e.g. a `gaptrace_capture.Capture` — raises
 `ValueError` if that capture was never committed); or an `sNrN` string
-(parsed via `ragradar_core.targets.parse_target_id`, looked up via
+(parsed via `gaptrace_core.targets.parse_target_id`, looked up via
 `store.get_run`, pipeline defaults to the row's `pipeline` or
 `"__default"`).
 
@@ -582,8 +582,8 @@ policy=None, save=True)`** (`facade.py:343`):
    metric name in `result.errors` — there is no per-metric partial
    success once you're past the applicability gate.
 7. `save=True` persists `result.to_eval_scores()` (`facade.py:252`, the
-   `{"input": ..., "output": ...}` shape read back by `ragradar explain`)
-   plus `risk_score` via `ragradar_core.store.write_eval_scores` — the only
+   `{"input": ..., "output": ...}` shape read back by `gaptrace explain`)
+   plus `risk_score` via `gaptrace_core.store.write_eval_scores` — the only
    persistence path.
 
 **`check(target, *, pipeline=None, policy=None)`** (`facade.py:476`):
@@ -594,7 +594,7 @@ free, deterministic, no LLM, never writes except a lazy benchmark build.
    data, rather than an exception.
 3. `_learned_thresholds(pipeline_key)` (`facade.py:575`): reads the
    `benchmark` table; if empty and ≥10 evaluated runs exist for the
-   pipeline, lazily calls `ragradar_evaluate.benchmark.builder.build()` to
+   pipeline, lazily calls `gaptrace_evaluate.benchmark.builder.build()` to
    populate it (a failed build — e.g. no RAGAS scores to correlate against
    — falls back silently to "use policy"). `CheckResult.thresholds` records
    which source ("learned" vs "policy") was actually used.
@@ -639,9 +639,9 @@ dict of **raw** values:
   ratio). `duplicate_ratio` = `(path_dup_count + window_dup_count) /
   total_chunks`.
 - **`score_truncation`** (`input_quality.py:153`): same severity logic
-  (none/low/high by score>0.7 threshold) as `ragradar explain`'s
-  `truncation.py` analyzer, duplicated here so `ragradar-evaluate` has no
-  runtime dependency on the `ragradar` package.
+  (none/low/high by score>0.7 threshold) as `gaptrace explain`'s
+  `truncation.py` analyzer, duplicated here so `gaptrace-evaluate` has no
+  runtime dependency on the `gaptrace` package.
 - **`score_token_efficiency`** (`input_quality.py:178`):
   `token_headroom_pct = headroom / total_limit` (0.0 when no
   `token_budget` was captured); `low_score_chunk_ratio` = fraction of
@@ -768,7 +768,7 @@ internal machinery driven by the CLI's `benchmark` subgroup, `cli.py:203`
   ~0.90–0.98, no truncation, 3 source docs; bad: rerank ~0.25–0.40, half
   the chunks truncated, 6–8 distinct `source_doc_id`s).
 - Writes them under the literal tag `f"{pipeline}__seeded"`
-  (`seeder.py:13`) via `ragradar_core.store.write_runs_batch` — a batch
+  (`seeder.py:13`) via `gaptrace_core.store.write_runs_batch` — a batch
   `INSERT`, bypassing the `Capture`/`commit()` API entirely since there's
   no live pipeline to instrument.
 - These seeded runs have **no RAGAS scores** — they exist purely to give
@@ -829,7 +829,7 @@ pipeline)`.
    `warn` if 1–2 failed; else `ok`. `risk_score` is read from the
    already-persisted `eval_scores`/`risk_score` columns
    (`store.get_eval_scores`, not recomputed) — so `benchmark check`
-   requires the run to have been evaluated via `ragradar-evaluate run`
+   requires the run to have been evaluated via `gaptrace-evaluate run`
    first, or `risk` silently reads as `None` (never counts toward the
    verdict).
 
@@ -839,7 +839,7 @@ pipeline)`.
   and runs missing `chunks`/`response`.
 - Writes one JSON object per line (`question`, `answer`, `contexts`,
   `ground_truth: null`, plus `run_id`/`pipeline`/`evaluated_at` metadata)
-  to `~/.ragradar/exports/<pipeline>_ragas_<timestamp>.jsonl` (or the given
+  to `~/.gaptrace/exports/<pipeline>_ragas_<timestamp>.jsonl` (or the given
   `--output` path) — a RAGAS-compatible dataset for offline reuse.
 
 ---
@@ -848,20 +848,20 @@ pipeline)`.
 
 `examples/rag_pipeline/` is now three standalone scripts, each runnable
 independently — there is no single `run_pipeline.py`/`pipeline.py`
-anymore. All three `import ragradar` (the umbrella package, §3.10), never
-`ragradar_capture`/`ragradar_evaluate` directly.
+anymore. All three `import gaptrace` (the umbrella package, §3.10), never
+`gaptrace_capture`/`gaptrace_evaluate` directly.
 
 ### 5.1 `01_quickstart.py` — the whole capture surface, fast
 
 ```
-ragradar.capture("what is 2+2?", "4")
-  → ragradar_capture.capture(): builds a Capture, sets response="4",
+gaptrace.capture("what is 2+2?", "4")
+  → gaptrace_capture.capture(): builds a Capture, sets response="4",
     commits immediately. Returns "sNrN".
 
-cap = ragradar.start(query="what is RRF?", pipeline="quickstart")
+cap = gaptrace.start(query="what is RRF?", pipeline="quickstart")
 cap.chunks([{ "content": "...", "retrieval_score": 0.9, "rerank_score": 0.95 }])
   → one plain dict with only content/retrieval_score/rerank_score given;
-    coerce_chunk() (ragradar_core/coerce.py:88) fills chunk_id="chunk_0",
+    coerce_chunk() (gaptrace_core/coerce.py:88) fills chunk_id="chunk_0",
     source_doc_id="unknown", token_count=estimate_tokens(content).
 run_id = cap.response("RRF combines rankings from multiple retrievers into one ranked list.")
   → auto-commits (cap.commit() is not called explicitly; response() does it)
@@ -894,7 +894,7 @@ this example used, this one stays inside the coherence threshold.
 **`pattern_full_fields()`** (`02_capture_patterns.py:69`) — one staged
 capture touching every field:
 ```
-cap = ragradar.start(query=..., pipeline=PIPELINE)
+cap = gaptrace.start(query=..., pipeline=PIPELINE)
 cap.metadata_filter(applied=True, candidate_count=6, excluded_count=2,
                      filters={"source": "internal"})
   → runs before retrieval, first statement in the function
@@ -920,7 +920,7 @@ No `cap.semantic_cache(...)` call here — this run never checks a
 semantic cache, so `explain/analyzers/semantic_cache.py` returns `None`
 and the "Cache behavior" panel doesn't render for it (only "Cache hits",
 from the per-chunk `cap.cache(...)` above, does). Verified live via
-`ragradar explain s4r3 --full` against a fresh store: this run renders
+`gaptrace explain s4r3 --full` against a fresh store: this run renders
 nine panels total — Token Usage, Chunk Scores, Duplicate Chunks,
 Truncation, Dropped History, Cache Hits, Score Degeneracy, Metadata
 Filter, Final Prompt — everything except Cache behavior.
@@ -930,7 +930,7 @@ Filter, Final Prompt — everything except Cache behavior.
 `sessions.created_at`/`runs.created_at` directly via raw SQL for every row
 matching `pipeline`. Real pipelines never touch `runs.db` directly —
 session gaps happen naturally over wall-clock time between calls to
-`ragradar.start()`.
+`gaptrace.start()`.
 
 **`pattern_multi_session_gap()`** (`02_capture_patterns.py:156`):
 1. Captures 2 queries under `PIPELINE` (creates session A, 2 runs).
@@ -940,8 +940,8 @@ session gaps happen naturally over wall-clock time between calls to
    creates a **new** session B (2 runs).
 
 **`pattern_thread_local_proxy()`** (`02_capture_patterns.py:172`): calls
-`ragradar.start(query=..., pipeline="proxy_demo")` then uses the
-module-level `ragradar.chunks()`/`ragradar.response()` proxies (not a
+`gaptrace.start(query=..., pipeline="proxy_demo")` then uses the
+module-level `gaptrace.chunks()`/`gaptrace.response()` proxies (not a
 `cap` object) — demonstrating the thread-local pattern for code that
 doesn't want to thread a `Capture` handle through its call stack. Creates
 its own session under `"proxy_demo"`.
@@ -963,7 +963,7 @@ session (1 run).
 
 Runs standalone (captures its own demo run first); `PIPELINE = "rag_example"`.
 
-**`capture_demo_run()`** (`03_evaluate.py:20`): one `ragradar.capture()`
+**`capture_demo_run()`** (`03_evaluate.py:20`): one `gaptrace.capture()`
 one-liner (not staged) with 4 chunks (`rrf_1`/`rrf_2` overlapping-content
 pair, `bm25_1` truncated with rerank 0.88, `win_1` with rerank 0.39) and a
 `token_budget` dict (headroom again derives to 196/4096 ≈ 4.8%). No
@@ -974,24 +974,24 @@ history/cache/tool_calls/metadata-filter captured here. Returns the run's
 `02_capture_patterns.py` (per the top-level README's quickstart order),
 this call's run becomes the actual latest run across the whole store —
 superseding `02_capture_patterns.py`'s `pattern_full_fields()` run (§5.2)
-as the target of a target-less `ragradar explain --full`. Since this run
+as the target of a target-less `gaptrace explain --full`. Since this run
 has no history/cache/metadata-filter, only **five** panels render for it:
 Token Usage, Chunk Scores, Duplicate Chunks, Truncation, Score Degeneracy
 — not the nine `pattern_full_fields()`'s run shows. The two demo runs
 serve different illustrative purposes but only one of them is actually
 "latest" once both scripts have run.
 
-**`show_check(run_id)`** (`03_evaluate.py:84`): `ragradar.check(run_id)` →
+**`show_check(run_id)`** (`03_evaluate.py:84`): `gaptrace.check(run_id)` →
 prints `verdict`/`risk_score`/`thresholds` plus a factor-by-factor table
 (`CheckResult.factors`) and any `problems` strings.
 
 **`show_single_metric(run_id)`** (`03_evaluate.py:113`):
-`ragradar.evaluate(run_id, metrics=["duplicates"], save=False)` — computes
+`gaptrace.evaluate(run_id, metrics=["duplicates"], save=False)` — computes
 **only** the duplicates family (nothing else, no DB write) and prints
 `duplicate_ratio`/`path_dup_count`/`window_dup_count`.
 
 **`show_full_evaluate(run_id)`** (`03_evaluate.py:124`):
-`ragradar.evaluate(run_id)` — `metrics=None` runs every applicable metric.
+`gaptrace.evaluate(run_id)` — `metrics=None` runs every applicable metric.
 For this run: 6 of the 8 input families compute (`relevance`,
 `duplicates`, `truncation`, `token_efficiency`, `coherence`,
 `score_degeneracy`); `cache_risk`/`filter_risk` land in `result.skipped`
@@ -1005,30 +1005,30 @@ output metric — this is the fail-soft path traced in §4.3 step 6,
 demonstrated live.
 
 **`show_available_metrics()`** (`03_evaluate.py:155`):
-`ragradar.available_metrics()` → prints all **twelve** registered
+`gaptrace.available_metrics()` → prints all **twelve** registered
 `MetricInfo` entries (name, layer, cost, requires) — see §4.3.
 
 `__main__` (`03_evaluate.py:166`-`177`) runs all four functions in order,
-then prints a pointer to `ragradar explain <run_id>` (to see the same
+then prints a pointer to `gaptrace explain <run_id>` (to see the same
 scores rendered alongside the run analysis) and
-`ragradar-evaluate benchmark export`.
+`gaptrace-evaluate benchmark export`.
 
 ---
 
 ## 6. Cross-cutting behaviors worth knowing
 
-- **Fail-open instrumentation**: every public `ragradar_capture.api`
+- **Fail-open instrumentation**: every public `gaptrace_capture.api`
   function/method catches its own exceptions and logs to
-  `~/.ragradar/errors.log`; nothing in the capture SDK can raise into a host
+  `~/.gaptrace/errors.log`; nothing in the capture SDK can raise into a host
   pipeline **unless strict mode is on** (`set_strict(True)` or
-  `RAGRADAR_CAPTURE_STRICT=1`, §2.2). `ragradar` and `ragradar-evaluate` are
+  `GAPTRACE_CAPTURE_STRICT=1`, §2.2). `gaptrace` and `gaptrace-evaluate` are
   not held to this standard — CLI errors there use
   `SystemExit(1)`/`ValueError` propagation deliberately, since they run
   interactively.
 
 - **The store always exists after any access — there is no "missing
-  runs.db" state to special-case.** `ragradar_core.store.connect()`
-  (`store.py:268`) unconditionally creates `~/.ragradar/` and `runs.db` (if
+  runs.db" state to special-case.** `gaptrace_core.store.connect()`
+  (`store.py:268`) unconditionally creates `~/.gaptrace/` and `runs.db` (if
   missing) and brings the schema to the latest version before returning a
   connection. There is no `_connect()` helper anywhere that returns `None`
   for a missing file — that was true of an earlier per-package store
@@ -1036,28 +1036,28 @@ scores rendered alongside the run analysis) and
   querying a real, freshly-created, empty database, not from a
   guard-clause on a missing file.
 
-- **Schema versioning is centralized in `ragradar_core`, not
-  package-local.** `ragradar_core.store` owns `SCHEMA_VERSION` and the
+- **Schema versioning is centralized in `gaptrace_core`, not
+  package-local.** `gaptrace_core.store` owns `SCHEMA_VERSION` and the
   entire migration chain (§4.1) in one file, invoked by `connect()` on
-  every open, from every package. `ragradar.cli`'s `main()` group callback
+  every open, from every package. `gaptrace.cli`'s `main()` group callback
   performs no schema check of any kind (§3) — there is no
-  `ragradar.store.check_schema_version()`. `ragradar_evaluate.cli`'s
+  `gaptrace.store.check_schema_version()`. `gaptrace_evaluate.cli`'s
   `main()` calls `store.ensure_store()` (§4), but this is no longer a
   special "upgrade" step unique to that package — every command in every
   package gets the same guarantee automatically via `connect()`. The
   practical result: a brand-new `runs.db` is created with FTS5 already
   wired up regardless of which package touches it first, and
-  `ragradar.store.search_runs()` hardcodes `fts5_available=True`
-  (`ragradar/store.py:82`) rather than probing for it — the plain-`LIKE`
+  `gaptrace.store.search_runs()` hardcodes `fts5_available=True`
+  (`gaptrace/store.py:82`) rather than probing for it — the plain-`LIKE`
   fallback branches in `find/query_builder.py` are exercised only by unit
   tests today, not by any live command.
 
 - **Two independent duplicate-detection implementations, and they don't
-  even count the same unit.** `ragradar explain`'s `duplicates.py`
+  even count the same unit.** `gaptrace explain`'s `duplicates.py`
   (`explain/analyzers/duplicates.py:4`) does substring-containment-only
   window-dup detection and reports `duplicate_ratio` as **distinct
   chunk_ids** implicated in any dup, divided by total chunks.
-  `ragradar-evaluate`'s `input_quality._detect_window_dups`
+  `gaptrace-evaluate`'s `input_quality._detect_window_dups`
   (`layers/input_quality.py:45`) does substring containment **or** >50%
   token-set Jaccard overlap, and reports `window_dup_count` as the number
   of qualifying **pairs** (deduped per source group), which feeds into
@@ -1066,15 +1066,15 @@ scores rendered alongside the run analysis) and
   on the exact same run for two independent reasons (the broader
   Jaccard check, and the pairs-vs-chunks unit mismatch), not just
   borderline-case substring disagreement. This is intentional package
-  independence (`ragradar-evaluate` doesn't import `ragradar`), not a bug,
-  but `ragradar explain`'s and `ragradar-evaluate run`'s duplicate numbers
+  independence (`gaptrace-evaluate` doesn't import `gaptrace`), not a bug,
+  but `gaptrace explain`'s and `gaptrace-evaluate run`'s duplicate numbers
   for the same run are not guaranteed to match, and the two implementations
   aren't even measuring quite the same thing.
 
 - **`"__default"` pipeline key**: the literal string `"__default"` is used
   everywhere a per-pipeline lookup key is needed and no `--pipeline`/
   run-derived pipeline is available — confirmed in `facade.py:314` and
-  throughout `ragradar_evaluate/cli.py`'s command bodies. (Seeded benchmark
+  throughout `gaptrace_evaluate/cli.py`'s command bodies. (Seeded benchmark
   pipelines use a different literal, `f"{pipeline}__seeded"` —
   `benchmark/seeder.py:13` — not the default-pipeline convention; don't
   confuse the two suffixes/keys.)

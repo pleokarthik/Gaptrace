@@ -1,9 +1,9 @@
-# ragradar — Scope Document
+# gaptrace — Scope Document
 
 **Status:** Draft v0.1 — original scope document, retained for delivery history.
-Tools 1 and 2 (ragradar-capture, ragradar) and Tool 3 (ragradar-evaluate) are
-delivered; Tool 4 (ragradar-improve) is still deferred. Store/schema
-ownership described below predates the later `ragradar-core` extraction —
+Tools 1 and 2 (gaptrace-capture, gaptrace) and Tool 3 (gaptrace-evaluate) are
+delivered; Tool 4 (gaptrace-improve) is still deferred. Store/schema
+ownership described below predates the later `gaptrace-core` extraction —
 see `docs/ARCHITECTURE.md` and `design-doc.md` for the current package
 picture and the `Capture` rename.  
 **Author:** Leo Karthik Paramasivan  
@@ -11,13 +11,13 @@ picture and the `Capture` rename.
 
 ---
 
-## Tool 1 + Tool 2 — `ragradar-capture` + `ragradar`
+## Tool 1 + Tool 2 — `gaptrace-capture` + `gaptrace`
 
 Delivered together. Single release. Shared store contract.
 
 ---
 
-### ragradar-capture
+### gaptrace-capture
 
 **What it is**
 
@@ -34,7 +34,7 @@ Not an analysis tool. Not a CLI. Not opinionated about the pipeline stack.
 **Core capture API**
 
 ```python
-ragradar.start(query, pipeline)          # begins a run, creates session if needed
+gaptrace.start(query, pipeline)          # begins a run, creates session if needed
 cap.chunks(chunks)                       # retrieval stage
 cap.context(prompt, budget)              # assembly stage
 cap.history(pre, post, eviction_reason)  # history management stage
@@ -43,20 +43,20 @@ cap.cache(events)                        # cache events
 cap.commit()                             # writes to store
 ```
 
-Thread-local active capture — `ragradar.*` accessible across files without passing the `Capture` object.
+Thread-local active capture — `gaptrace.*` accessible across files without passing the `Capture` object.
 
 Auto-commit on `cap.response()` if `cap.commit()` not called explicitly.
 
 **Single-line fallback**
 
 ```python
-ragradar.capture(query, response)    # minimum viable — two fields only
+gaptrace.capture(query, response)    # minimum viable — two fields only
 ```
 
 **Scaffold generator**
 
 ```bash
-ragradar-capture init
+gaptrace-capture init
 ```
 
 Generates a starter `ctx_pipeline.py` with capture calls pre-positioned at correct pipeline stages. For Dev 1 — greenfield only.
@@ -67,15 +67,15 @@ Auto-session grouping on 30-minute idle gap. New session created automatically. 
 
 **Store initialisation**
 
-`~/.ragradar/runs.db` created on first capture. Schema migrations handled internally. `meta` table holds schema version.
+`~/.gaptrace/runs.db` created on first capture. Schema migrations handled internally. `meta` table holds schema version.
 
 **Failure contract**
 
-All capture calls wrapped in try/except internally. Failures logged to `~/.ragradar/errors.log`. Pipeline never interrupted under any circumstance.
+All capture calls wrapped in try/except internally. Failures logged to `~/.gaptrace/errors.log`. Pipeline never interrupted under any circumstance.
 
 ---
 
-**Schema — owned by ragradar-capture at delivery time** (later centralized into the `ragradar-core` kernel; see `ARCHITECTURE.md`)
+**Schema — owned by gaptrace-capture at delivery time** (later centralized into the `gaptrace-core` kernel; see `ARCHITECTURE.md`)
 
 ```sql
 meta(key, value)
@@ -127,32 +127,32 @@ Zero third-party dependencies.
 **Deliverables**
 
 ```
-ragradar_capture/
-  api.py              # public surface — ragradar.start(), cap.*, ragradar.capture()
+gaptrace_capture/
+  api.py              # public surface — gaptrace.start(), cap.*, gaptrace.capture()
   schema.py           # RunRecord and child dataclasses
   store.py            # SQLite write, schema init, migrations
   thread_local.py     # active capture registry
   scaffold/
-    template.py       # ragradar-capture init generator
+    template.py       # gaptrace-capture init generator
 pyproject.toml
 README.md
 ```
 
 (`schema.py` and `store.py` as planned here were later extracted into the
-shared `ragradar-core` kernel once `ragradar` and `ragradar-evaluate` needed
-the same schema and store — see `ARCHITECTURE.md`. `ragradar_capture` today
+shared `gaptrace-core` kernel once `gaptrace` and `gaptrace-evaluate` needed
+the same schema and store — see `ARCHITECTURE.md`. `gaptrace_capture` today
 holds only `api.py`, `thread_local.py`, and `scaffold/`.)
 
 ---
 
 **Acceptance criteria**
 
-- `pip install ragradar-capture` works, zero dependencies beyond stdlib
-- `ragradar-capture init` generates a runnable scaffold
+- `pip install gaptrace-capture` works, zero dependencies beyond stdlib
+- `gaptrace-capture init` generates a runnable scaffold
 - Capture with two fields works without error
 - Capture with all fields works without error
 - Pipeline never raises on capture failure
-- `~/.ragradar/runs.db` created on first run
+- `~/.gaptrace/runs.db` created on first run
 - Schema version present in `meta` table
 - Sessions auto-created on 30-minute idle gap
 - Thread-local run accessible across module boundaries
@@ -160,11 +160,11 @@ holds only `api.py`, `thread_local.py`, and `scaffold/`.)
 ---
 ---
 
-### ragradar
+### gaptrace
 
 **What it is**
 
-Standalone analyst CLI. Reads from `~/.ragradar/runs.db`. Browse sessions, search runs, explain a specific run. Read-only consumer of the store.
+Standalone analyst CLI. Reads from `~/.gaptrace/runs.db`. Browse sessions, search runs, explain a specific run. Read-only consumer of the store.
 
 **What it is not**
 
@@ -177,23 +177,23 @@ Not a capture tool. Not an evaluation tool. Never writes to the store.
 **Command surface**
 
 ```bash
-ragradar list                          # list sessions, most recent first
-ragradar list s2                       # list runs inside session 2
-ragradar find <hint>                   # search runs by query text
-ragradar find <hint> --exact           # phrase match instead of token match
-ragradar find <hint> --from <date>     # date filter
-ragradar find <hint> --to <date>       # date filter
-ragradar find <hint> --today           # shorthand date filter
-ragradar find <hint> --session <id>    # scope to session
-ragradar find <hint> --pipeline <name> # scope to pipeline
-ragradar find --recent                 # latest N runs, no hint
-ragradar explain                       # latest run
-ragradar explain <target>              # specific run — s2r3
-ragradar explain <target> --full       # expanded output
-ragradar explain <target> --html       # snapshot to ~/.ragradar/reports/
-ragradar diff <target> <target>        # compare two runs
-ragradar budget <target>               # token waterfall only
-ragradar session rename <id> <title>   # rename a session
+gaptrace list                          # list sessions, most recent first
+gaptrace list s2                       # list runs inside session 2
+gaptrace find <hint>                   # search runs by query text
+gaptrace find <hint> --exact           # phrase match instead of token match
+gaptrace find <hint> --from <date>     # date filter
+gaptrace find <hint> --to <date>       # date filter
+gaptrace find <hint> --today           # shorthand date filter
+gaptrace find <hint> --session <id>    # scope to session
+gaptrace find <hint> --pipeline <name> # scope to pipeline
+gaptrace find --recent                 # latest N runs, no hint
+gaptrace explain                       # latest run
+gaptrace explain <target>              # specific run — s2r3
+gaptrace explain <target> --full       # expanded output
+gaptrace explain <target> --html       # snapshot to ~/.gaptrace/reports/
+gaptrace diff <target> <target>        # compare two runs
+gaptrace budget <target>               # token waterfall only
+gaptrace session rename <id> <title>   # rename a session
 ```
 
 ---
@@ -212,7 +212,7 @@ Resolution order — same for all commands:
 
 ---
 
-**Search — ragradar find**
+**Search — gaptrace find**
 
 Token match default — hint split into terms, OR logic across query text:
 
@@ -236,7 +236,7 @@ Disambiguation screen when multiple matches:
 
 ---
 
-**Analysis — ragradar explain**
+**Analysis — gaptrace explain**
 
 Nine factors. Each computed deterministically at read time from captured run data. Skipped silently if required data not present.
 
@@ -265,12 +265,12 @@ Output modes:
 ```
 default    —  compact, one screen
 --full     —  all sections, all chunks
---html     —  snapshot to ~/.ragradar/reports/<run_id>.html
+--html     —  snapshot to ~/.gaptrace/reports/<run_id>.html
 ```
 
 ---
 
-**Diff — ragradar diff**
+**Diff — gaptrace diff**
 
 Two confirmed targets. Deterministic comparison:
 
@@ -287,7 +287,7 @@ Primary use: comparing two iterations of the same query within a session.
 
 ---
 
-**ragradar list output**
+**gaptrace list output**
 
 ```
 Sessions view:
@@ -295,7 +295,7 @@ Sessions view:
   s5    3      rkis       2h ago       auto: "does RRF handle score..."
   s4    2      rkis       1d ago       Cross-encoder reranking
 
-Runs view (ragradar list s2):
+Runs view (gaptrace list s2):
   s2 r4   2026-06-19   "does rerank order depend on retrieval scores"
   s2 r3   2026-06-19   "does RRF handle score scale differences"
 ```
@@ -322,16 +322,16 @@ sqlite-vec                    # vector search — optional, semantic mode only
 sentence-transformers         # embeddings — optional, semantic mode only
 ```
 
-Semantic dependencies are optional extras — `pip install ragradar[semantic]`.
+Semantic dependencies are optional extras — `pip install gaptrace[semantic]`.
 
 ---
 
 **Deliverables**
 
 ```
-ragradar/
-  cli.py                      # entrypoint — all ragradar commands, incl. session rename
-  store.py                    # read-only SQLite queries (delegates to ragradar-core)
+gaptrace/
+  cli.py                      # entrypoint — all gaptrace commands, incl. session rename
+  store.py                    # read-only SQLite queries (delegates to gaptrace-core)
   find/
     query_builder.py          # filter → SQL composer
     bm25.py                   # token scoring
@@ -362,19 +362,19 @@ separate `session.py` module.)
 
 **Acceptance criteria**
 
-- `pip install ragradar` works
-- `ragradar list` shows sessions in recency order
-- `ragradar list s2` shows runs scoped to session 2
-- `ragradar find "term"` returns all matching runs
+- `pip install gaptrace` works
+- `gaptrace list` shows sessions in recency order
+- `gaptrace list s2` shows runs scoped to session 2
+- `gaptrace find "term"` returns all matching runs
 - All date and pipeline filters work correctly
-- `ragradar explain` with no arg explains latest run
-- `ragradar explain s2r3` explains correct run
+- `gaptrace explain` with no arg explains latest run
+- `gaptrace explain s2r3` explains correct run
 - All nine analysis factors render when data present
 - Factors skip silently when data absent — no errors
-- `ragradar explain --html` writes file to `~/.ragradar/reports/`
-- `ragradar diff s2r3 s2r1` produces side-by-side comparison
-- `ragradar budget s2r3` renders token waterfall only
-- `ragradar session rename s2 "title"` persists rename
+- `gaptrace explain --html` writes file to `~/.gaptrace/reports/`
+- `gaptrace diff s2r3 s2r1` produces side-by-side comparison
+- `gaptrace budget s2r3` renders token waterfall only
+- `gaptrace session rename s2 "title"` persists rename
 - Disambiguation screen fires on multiple search matches
 - No write operations to runs.db under any circumstance
 - Schema version mismatch produces a clear warning
@@ -382,9 +382,9 @@ separate `session.py` module.)
 ---
 ---
 
-## Tool 3 — `ragradar-evaluate`
+## Tool 3 — `gaptrace-evaluate`
 
-**Delivered separately, after ragradar-capture + ragradar are stable.**
+**Delivered separately, after gaptrace-capture + gaptrace are stable.**
 
 ---
 
@@ -430,16 +430,16 @@ Both layers write to a new `eval_scores` field on the run record.
 Builds correlation model between input quality factors and output quality scores across accumulated runs.
 
 ```bash
-ragradar-evaluate benchmark build          # correlate input factors vs output scores
-ragradar-evaluate benchmark show           # display discovered thresholds
-ragradar-evaluate benchmark check s2r3     # score a run against benchmark
-ragradar-evaluate benchmark export         # export as RAGAS-compatible dataset
+gaptrace-evaluate benchmark build          # correlate input factors vs output scores
+gaptrace-evaluate benchmark show           # display discovered thresholds
+gaptrace-evaluate benchmark check s2r3     # score a run against benchmark
+gaptrace-evaluate benchmark export         # export as RAGAS-compatible dataset
 ```
 
 Bootstrap path — no historical runs yet:
 
 ```bash
-ragradar-evaluate benchmark seed           # generate synthetic known-good
+gaptrace-evaluate benchmark seed           # generate synthetic known-good
                                       # and known-bad context windows
                                       # as day-zero baseline
 ```
@@ -481,7 +481,7 @@ def compute_risk_score(run, policy) -> float:
 
 ---
 
-**Schema additions — ragradar-evaluate owns**
+**Schema additions — gaptrace-evaluate owns**
 
 ```sql
 ALTER TABLE runs ADD COLUMN eval_scores JSON;
@@ -510,18 +510,18 @@ CREATE TABLE policies (
 **CLI surface**
 
 ```bash
-ragradar-evaluate run s2r3                 # evaluate one run — both layers
-ragradar-evaluate run s2r3 --input-only    # skip RAGAS, input quality only
-ragradar-evaluate run s2r3 --output-only   # skip input, RAGAS only
-ragradar-evaluate run --session s2         # evaluate all runs in session
-ragradar-evaluate benchmark build
-ragradar-evaluate benchmark show
-ragradar-evaluate benchmark check s2r3
-ragradar-evaluate benchmark seed
-ragradar-evaluate benchmark export
-ragradar-evaluate policy show              # show active policy
-ragradar-evaluate policy set <field> <val> # update a policy value
-ragradar-evaluate policy reset             # restore defaults
+gaptrace-evaluate run s2r3                 # evaluate one run — both layers
+gaptrace-evaluate run s2r3 --input-only    # skip RAGAS, input quality only
+gaptrace-evaluate run s2r3 --output-only   # skip input, RAGAS only
+gaptrace-evaluate run --session s2         # evaluate all runs in session
+gaptrace-evaluate benchmark build
+gaptrace-evaluate benchmark show
+gaptrace-evaluate benchmark check s2r3
+gaptrace-evaluate benchmark seed
+gaptrace-evaluate benchmark export
+gaptrace-evaluate policy show              # show active policy
+gaptrace-evaluate policy set <field> <val> # update a policy value
+gaptrace-evaluate policy reset             # restore defaults
 ```
 
 ---
@@ -532,7 +532,7 @@ ragradar-evaluate policy reset             # restore defaults
 - No browsing
 - No improvement passes
 - No cloud evaluation services beyond RAGAS API calls
-- ragradar-improve integration deferred — risk score computed and stored, consumed later
+- gaptrace-improve integration deferred — risk score computed and stored, consumed later
 
 ---
 
@@ -552,7 +552,7 @@ click                         # CLI framework
 **Deliverables**
 
 ```
-ragradar_evaluate/
+gaptrace_evaluate/
   cli.py                      # entrypoint
   facade.py                   # public task API — check(), evaluate(), available_metrics()
   layers/
@@ -574,19 +574,19 @@ README.md
 (The task-level `check()`/`evaluate()`/`available_metrics()` facade above
 was added after this scope was drafted — the CLI now routes through it
 instead of scoring directly. `eval_scores`/benchmark persistence itself
-lives in the shared `ragradar-core` store, not a package-local `store.py`.)
+lives in the shared `gaptrace-core` store, not a package-local `store.py`.)
 
 ---
 
 **Acceptance criteria**
 
-- `ragradar-evaluate run s2r3` produces input + output scores
-- `ragradar-evaluate run s2r3 --input-only` runs without RAGAS dependency
-- Scores written to run record, readable by ragradar explain
-- `ragradar-evaluate benchmark build` requires minimum 10 runs
-- `ragradar-evaluate benchmark seed` generates usable day-zero baseline
-- `ragradar-evaluate benchmark show` displays per-factor thresholds
-- `ragradar-evaluate benchmark export` produces RAGAS-compatible dataset
+- `gaptrace-evaluate run s2r3` produces input + output scores
+- `gaptrace-evaluate run s2r3 --input-only` runs without RAGAS dependency
+- Scores written to run record, readable by gaptrace explain
+- `gaptrace-evaluate benchmark build` requires minimum 10 runs
+- `gaptrace-evaluate benchmark seed` generates usable day-zero baseline
+- `gaptrace-evaluate benchmark show` displays per-factor thresholds
+- `gaptrace-evaluate benchmark export` produces RAGAS-compatible dataset
 - Risk score between 0.0 and 1.0 stored on run record
 - Policy defaults apply without any developer configuration
 - Policy overrides persist across sessions
@@ -597,11 +597,11 @@ lives in the shared `ragradar-core` store, not a package-local `store.py`.)
 ## Build order
 
 ```
-Phase 1   ragradar-capture + ragradar          single release, delivered together
-Phase 2   ragradar-evaluate               after Phase 1 is stable
-Phase 3   ragradar-improve                lowest priority, future
+Phase 1   gaptrace-capture + gaptrace          single release, delivered together
+Phase 2   gaptrace-evaluate               after Phase 1 is stable
+Phase 3   gaptrace-improve                lowest priority, future
 ```
 
-## Future — ragradar-improve
+## Future — gaptrace-improve
 
-Deferred. Acts on risk score and benchmark findings to improve context quality before the LLM call. Three stages — filter (rules + SLM), rerank (SLM), rewrite (LLM, opt-in). Consumes output of ragradar-evaluate. No scope defined until ragradar-evaluate is stable and benchmark has real data.
+Deferred. Acts on risk score and benchmark findings to improve context quality before the LLM call. Three stages — filter (rules + SLM), rerank (SLM), rewrite (LLM, opt-in). Consumes output of gaptrace-evaluate. No scope defined until gaptrace-evaluate is stable and benchmark has real data.

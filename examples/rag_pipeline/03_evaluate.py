@@ -1,15 +1,15 @@
 """
-Evaluate captured runs with the two ragradar user tasks:
+Evaluate captured runs with the two gaptrace user tasks:
 
   check(run_id)     -- "is this run healthy?"  free, deterministic, instant
   evaluate(run_id)  -- "score it fully" (or any subset of metrics)
 
 Runs standalone: it captures one demonstration run first (run
 02_capture_patterns.py beforehand if you want more runs to browse with
-`ragradar list`).
+`gaptrace list`).
 """
 
-import ragradar
+import gaptrace
 from rich.console import Console
 from rich.table import Table
 
@@ -19,7 +19,7 @@ PIPELINE = "rag_example"
 
 def capture_demo_run() -> str:
     """Capture one run with deliberately mixed-quality retrieval, staged
-    end-to-end so every ragradar explain panel that *can* fire on this
+    end-to-end so every gaptrace explain panel that *can* fire on this
     record shape has data to render.
 
     Matches the field breadth of 02_capture_patterns.py's
@@ -38,7 +38,7 @@ def capture_demo_run() -> str:
     Cache behavior (semantic_cache) is the one panel that structurally
     can't fire here: no example script calls cap.semantic_cache().
     """
-    cap = ragradar.start("what is RRF and how does it normalize scores?", pipeline=PIPELINE)
+    cap = gaptrace.start("what is RRF and how does it normalize scores?", pipeline=PIPELINE)
 
     # Metadata filter runs before retrieval; excluded candidates never reach scoring.
     cap.metadata_filter(
@@ -142,7 +142,7 @@ def capture_demo_run() -> str:
 
 def show_check(run_id: str) -> None:
     """Task 1: is this run healthy? Call before paying for an LLM."""
-    result = ragradar.check(run_id)
+    result = gaptrace.check(run_id)
 
     style = {"ok": "green", "warn": "yellow", "fail": "red"}[result.verdict]
     risk = "-" if result.risk_score is None else f"{result.risk_score:.2f}"
@@ -171,7 +171,7 @@ def show_check(run_id: str) -> None:
 
 def show_single_metric(run_id: str) -> None:
     """Atomic selection: compute exactly one cheap metric, nothing else."""
-    result = ragradar.evaluate(run_id, metrics=["duplicates"], save=False)
+    result = gaptrace.evaluate(run_id, metrics=["duplicates"], save=False)
     dup = result.metrics["duplicates"]
     console.print(
         f'\n[bold]evaluate({run_id}, metrics=["duplicates"])[/bold] -> '
@@ -182,7 +182,7 @@ def show_single_metric(run_id: str) -> None:
 
 def show_full_evaluate(run_id: str) -> None:
     """Complete eval: every applicable metric; scores persist on the run."""
-    result = ragradar.evaluate(run_id)
+    result = gaptrace.evaluate(run_id)
 
     console.print(f"\n[bold]evaluate({run_id})[/bold] -- saved: {result.saved}")
     risk = "-" if result.risk_score is None else f"{result.risk_score:.2f}"
@@ -212,12 +212,12 @@ def show_full_evaluate(run_id: str) -> None:
 
 
 def show_available_metrics() -> None:
-    tbl = Table(title="ragradar.available_metrics()")
+    tbl = Table(title="gaptrace.available_metrics()")
     tbl.add_column("Metric")
     tbl.add_column("Layer")
     tbl.add_column("Cost")
     tbl.add_column("Requires")
-    for name, info in ragradar.available_metrics().items():
+    for name, info in gaptrace.available_metrics().items():
         tbl.add_row(name, info.layer, info.cost, ", ".join(info.requires))
     console.print(tbl)
 
@@ -229,8 +229,8 @@ if __name__ == "__main__":
     show_full_evaluate(run_id)
     show_available_metrics()
     console.print(
-        "\nNext: [cyan]ragradar explain "
+        "\nNext: [cyan]gaptrace explain "
         f"{run_id}[/cyan] shows these scores alongside the run analysis; "
-        "[cyan]ragradar-evaluate benchmark export[/cyan] writes a RAGAS-compatible "
+        "[cyan]gaptrace-evaluate benchmark export[/cyan] writes a RAGAS-compatible "
         "dataset of everything evaluated."
     )

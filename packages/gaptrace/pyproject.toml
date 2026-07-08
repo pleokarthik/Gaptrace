@@ -1,0 +1,51 @@
+[project]
+name = "gaptrace"
+version = "0.1.0"
+description = "RAG observability: capture, evaluate, and explain pipeline runs (umbrella package + analyst CLI)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [
+    { name = "Leo Karthik Paramasivan", email = "pleokarthik@gmail.com" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Intended Audience :: Developers",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "gaptrace-core>=0.1.0,<0.2.0",
+    "gaptrace-capture>=0.1.0,<0.2.0",
+    "gaptrace-evaluate>=0.1.0,<0.2.0",
+    "rich>=13.0",
+    "click>=8.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/pleokarthik/Gaptrace"
+Repository = "https://github.com/pleokarthik/Gaptrace"
+Issues = "https://github.com/pleokarthik/Gaptrace/issues"
+
+[project.optional-dependencies]
+semantic = [
+    "sentence-transformers>=3.0",
+    "sqlite-vec>=0.1",
+]
+
+[project.scripts]
+gaptrace = "gaptrace.cli:main"
+
+[tool.uv.sources]
+gaptrace-core = { workspace = true }
+gaptrace-capture = { workspace = true }
+gaptrace-evaluate = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gaptrace"]

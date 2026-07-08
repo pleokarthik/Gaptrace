@@ -7,12 +7,21 @@ dist/
 build/
 *.so
 
+# editor/tool temp artifacts
+*.tmp
+*.tmp.*
+*.bak
+*.orig
+*.swp
+*.swo
+*~
+
 # uv
 .uv/
 uv.lock
 
-# ragradar runtime — never commit user run data
-.ragradar/
+# gaptrace runtime — never commit user run data
+.gaptrace/
 
 # environment
 .env

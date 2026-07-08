@@ -68,7 +68,7 @@ class TestTokens:
 
     def test_values(self, full_record):
         result = tokens.analyze(full_record)
-        assert result["chunks_tokens"] == 80  # 50 + 30
+        assert result["chunks_tokens"] == 2000  # from token_budget.chunks_allocated, not sum(50 + 30)
         assert result["system_tokens"] == 800
         assert result["headroom"] == 796
         assert result["model_limit"] == 4096
@@ -105,6 +105,67 @@ class TestTokens:
         )
         result = tokens.analyze(record)
         assert result["history_tokens"] == 30  # post only: 10+20
+
+    def test_chunks_tokens_uses_budget_allocation_when_present(self):
+        """chunks_tokens must reflect what actually went into the prompt
+        (token_budget.chunks_allocated), not the full captured-candidate-pool
+        sum over record.chunks — the two are allowed to diverge, e.g. when
+        candidates are retrieved but only some are ultimately assembled."""
+        record = RunRecord(
+            query="q",
+            response="r",
+            chunks=[
+                ChunkRecord(
+                    chunk_id="c1",
+                    source_doc_id="d1",
+                    content="text one",
+                    token_count=500,
+                ),
+                ChunkRecord(
+                    chunk_id="c2",
+                    source_doc_id="d2",
+                    content="text two",
+                    token_count=700,
+                ),
+            ],
+            token_budget=TokenBudget(
+                total_limit=4096,
+                chunks_allocated=900,
+                history_allocated=200,
+                system_allocated=300,
+                headroom=2696,
+            ),
+        )
+        result = tokens.analyze(record)
+        assert result["chunks_tokens"] == 900
+        assert result["chunks_tokens"] == record.token_budget.chunks_allocated
+        # per_chunk breakdown is unaffected: still per-candidate token counts.
+        assert {c["token_count"] for c in result["per_chunk"]} == {500, 700}
+
+    def test_chunks_tokens_falls_back_to_sum_without_token_budget(self):
+        """When no token_budget was ever captured (e.g. a caller that calls
+        cap.chunks() without cap.context()), chunks_tokens falls back to
+        summing record.chunks — the only case where that sum is meaningful."""
+        record = RunRecord(
+            query="q",
+            response="r",
+            chunks=[
+                ChunkRecord(
+                    chunk_id="c1",
+                    source_doc_id="d1",
+                    content="text one",
+                    token_count=50,
+                ),
+                ChunkRecord(
+                    chunk_id="c2",
+                    source_doc_id="d2",
+                    content="text two",
+                    token_count=30,
+                ),
+            ],
+        )
+        result = tokens.analyze(record)
+        assert result["chunks_tokens"] == 80
 
 
 class TestDuplicates:

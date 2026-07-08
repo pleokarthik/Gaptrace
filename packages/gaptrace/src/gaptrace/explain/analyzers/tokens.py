@@ -5,17 +5,18 @@ def analyze(record: RunRecord) -> dict | None:
     if not record.chunks and not record.final_prompt:
         return None
 
-    chunks_tokens = sum(c.token_count for c in (record.chunks or []))
-
     history_tokens = sum(t.tokens or 0 for t in (record.history_post or []))
 
     system_tokens = 0
     headroom = 0
     model_limit = None
     if record.token_budget:
+        chunks_tokens = record.token_budget.chunks_allocated
         system_tokens = record.token_budget.system_allocated
         headroom = record.token_budget.headroom
         model_limit = record.token_budget.total_limit
+    else:
+        chunks_tokens = sum(c.token_count for c in (record.chunks or []))
 
     total = chunks_tokens + history_tokens + system_tokens
     utilisation = (total / model_limit * 100) if model_limit else 0.0

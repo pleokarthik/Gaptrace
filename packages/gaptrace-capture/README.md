@@ -206,7 +206,7 @@ as `TypeError`.
 gaptrace-capture init
 ```
 
-Generates a starter `ctx_pipeline.py` in the current directory with
+Generates a starter `gaptrace_pipeline.py` in the current directory with
 capture calls pre-positioned at the right pipeline stages (refuses to
 overwrite an existing one).
 

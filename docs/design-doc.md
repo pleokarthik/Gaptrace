@@ -345,9 +345,9 @@ For development, strict mode inverts the contract: `gaptrace_capture.set_strict(
 
 ### Scaffold generator
 
-`gaptrace-capture init` generates a `ctx_pipeline.py` file in the current directory with capture calls pre-positioned at the correct pipeline stages. The generated file contains commented-out placeholders for each stage, showing where to insert retriever calls, assembler calls, and LLM calls. This is the greenfield onboarding path — a developer who has never used gaptrace can generate the scaffold, fill in their pipeline functions, and have full instrumentation from the first run.
+`gaptrace-capture init` generates a `gaptrace_pipeline.py` file in the current directory with capture calls pre-positioned at the correct pipeline stages. The generated file contains commented-out placeholders for each stage, showing where to insert retriever calls, assembler calls, and LLM calls. This is the greenfield onboarding path — a developer who has never used gaptrace can generate the scaffold, fill in their pipeline functions, and have full instrumentation from the first run.
 
-The scaffold raises `FileExistsError` if `ctx_pipeline.py` already exists, preventing accidental overwrites.
+The scaffold raises `FileExistsError` if `gaptrace_pipeline.py` already exists, preventing accidental overwrites.
 
 ---
 

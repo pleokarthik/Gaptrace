@@ -59,7 +59,7 @@ gaptrace.capture(query, response)    # minimum viable — two fields only
 gaptrace-capture init
 ```
 
-Generates a starter `ctx_pipeline.py` with capture calls pre-positioned at correct pipeline stages. For Dev 1 — greenfield only.
+Generates a starter `gaptrace_pipeline.py` with capture calls pre-positioned at correct pipeline stages. For Dev 1 — greenfield only.
 
 **Session management**
 

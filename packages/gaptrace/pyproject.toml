@@ -1,7 +1,7 @@
 [project]
 name = "gaptrace"
 version = "0.1.0"
-description = "RAG observability: capture, evaluate, and explain pipeline runs (umbrella package + analyst CLI)"
+description = "Deterministic, local-first observability for RAG and agentic pipelines (umbrella package + analyst CLI)"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"

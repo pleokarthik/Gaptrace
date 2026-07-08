@@ -1,12 +1,19 @@
-import sys
+import click
 
 from gaptrace_capture.scaffold.template import generate_scaffold
 
 
+@click.group()
 def main():
+    """gaptrace-capture -- pipeline instrumentation SDK for gaptrace observability system."""
+
+
+@main.command()
+def init():
+    """Generate a starter gaptrace_pipeline.py in the current directory."""
     try:
         path = generate_scaffold()
-        print(f"Created {path.name} — fill in your pipeline stages.")
     except FileExistsError as e:
-        print(str(e), file=sys.stderr)
-        sys.exit(1)
+        click.echo(str(e), err=True)
+        raise SystemExit(1)
+    click.echo(f"Created {path.name} — fill in your pipeline stages.")

@@ -5,7 +5,7 @@ class TestGenerateScaffold:
     def test_creates_file(self, tmp_path):
         path = generate_scaffold(tmp_path)
         assert path.exists()
-        assert path.name == "ctx_pipeline.py"
+        assert path.name == "gaptrace_pipeline.py"
         content = path.read_text(encoding="utf-8")
         assert "gaptrace_capture.start" in content
         old_alias = "gaptrace" + "run"  # retired import name; concat keeps repo grep clean

@@ -18,6 +18,7 @@ classifiers = [
 ]
 dependencies = [
     "gaptrace-core>=0.1.0,<0.2.0",
+    "click>=8.0",
 ]
 
 [project.urls]
